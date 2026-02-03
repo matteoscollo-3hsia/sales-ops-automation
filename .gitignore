@@ -17,3 +17,7 @@ output/
 # OS / Editor
 .DS_Store
 .vscode/
+
+# Prompts (private)
+prompts/_private/
+*.xlsx
