@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional
 
 from primer_ops.progress import spinner, format_seconds
 from dotenv import find_dotenv, load_dotenv
-from openai import OpenAI
+from openai import OpenAI, NotFoundError, RateLimitError
 from openpyxl import load_workbook
 
 from primer_ops.config import get_output_dir
@@ -90,12 +90,58 @@ def _find_step1_anchor(ws, start_row: int = 1) -> Optional[Any]:
     return None
 
 
+def _is_model_not_found_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    if isinstance(err, NotFoundError):
+        return ("model" in msg) or ("model_not_found" in msg)
+    status_code = getattr(err, "status_code", None)
+    if status_code == 404:
+        return ("model" in msg) or ("model_not_found" in msg)
+    return "model_not_found" in msg
+
+
+def _format_error_reason(err: Exception) -> str:
+    status_code = getattr(err, "status_code", None)
+    if status_code is not None:
+        return f"{status_code}: {err}"
+    return str(err)
+
+
+def _call_openai_with_retries(
+    client: OpenAI,
+    request_kwargs: dict[str, Any],
+    *,
+    max_retries: int,
+    base_sleep_seconds: float,
+) -> Any:
+    attempt = 0
+    while True:
+        try:
+            return client.responses.create(**request_kwargs)
+        except RateLimitError as err:
+            msg = str(err).lower()
+            code = getattr(err, "code", None)
+            should_retry = (code == "rate_limit_exceeded") or ("rate limit reached" in msg)
+            if not should_retry:
+                raise
+            if attempt >= max_retries:
+                raise
+            match = re.search(r"try again in\s+(\d+)ms", msg)
+            if match:
+                sleep_seconds = (int(match.group(1)) + 50) / 1000.0
+            else:
+                sleep_seconds = min(base_sleep_seconds * (2**attempt), 10.0)
+            print(
+                f"Rate limited (attempt {attempt + 1}/{max_retries}). "
+                f"Sleeping {sleep_seconds:.2f}s then retrying..."
+            )
+            time.sleep(sleep_seconds)
+            attempt += 1
+
+
 def generate_primer(output_dir: str | None = None, sheet: str = "Company and Industry Intro") -> None:
     env_path = find_dotenv(usecwd=True)
     load_dotenv(env_path, override=True)
-    # TEMP DEBUG
-    print(f"ENV_FILE={env_path}")
-    print(f"PROMPT_LIBRARY_PATH={os.getenv('PROMPT_LIBRARY_PATH','').strip()}")
     t0 = time.perf_counter()
     step = 0
     total_steps = 5
@@ -115,6 +161,8 @@ def generate_primer(output_dir: str | None = None, sheet: str = "Company and Ind
 
     base_model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5.2"
     deep_model = os.getenv("OPENAI_DEEP_RESEARCH_MODEL", "").strip() or "o4-mini-deep-research"
+    max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "").strip() or 6)
+    base_sleep_seconds = float(os.getenv("OPENAI_RETRY_BASE_SECONDS", "").strip() or 0.5)
 
     output_dir_path = Path(resolved_output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
@@ -129,12 +177,10 @@ def generate_primer(output_dir: str | None = None, sheet: str = "Company and Ind
         raise SystemExit("ERROR: company_name missing from lead_input.json")
 
     prompt_path = Path(prompt_library_path)
-    log_step("Loading prompt library (Excel)")
     if not prompt_path.is_absolute():
         repo_root = Path(__file__).resolve().parents[2]
         prompt_path = repo_root / prompt_path
-    # TEMP DEBUG
-    print(f"PROMPT_LIBRARY_ABS={prompt_path}")
+    log_step("Loading prompt library (Excel)")
     workbook = load_workbook(prompt_path, data_only=True)
     if sheet not in workbook.sheetnames:
         raise SystemExit(f"ERROR: sheet not found: {sheet}")
@@ -187,37 +233,129 @@ def generate_primer(output_dir: str | None = None, sheet: str = "Company and Ind
     prompt = _replace_placeholders(suggested_prompt_value, company_name)
 
     web_search_enabled = _normalize(str(web_search_value)).startswith("enable")
-    deep_research_enabled = _normalize(str(deep_research_value)).startswith("enable")
-    if deep_research_enabled and not web_search_enabled:
+    deep_research_requested = _normalize(str(deep_research_value)).startswith("enable")
+    if deep_research_requested and not web_search_enabled:
         raise SystemExit(
             "ERROR: Deep Research is Enable but Web Search is not Enable. Deep Research needs a data source."
         )
 
-    model = deep_model if deep_research_enabled else base_model
-
     client = OpenAI()
-    request_kwargs = {"model": model, "input": prompt}
-    if web_search_enabled:
-        request_kwargs["tools"] = [
-            {"type": "web_search_preview" if deep_research_enabled else "web_search"}
-        ]
-    if (not deep_research_enabled) and reasoning_effort is not None:
-        request_kwargs["reasoning"] = {"effort": reasoning_effort}
+    model = base_model
+    web_tool_type: str | None = "web_search" if web_search_enabled else None
+    deep_research_effective = False
+    deep_research_error_reason: str | None = None
+    request_used: dict[str, Any] = {}
+    response: Any | None = None
+    error_info: dict[str, str] | None = None
+
+    log_step("Calling OpenAI (this can take a bit)")
+    with spinner("Waiting for OpenAI response"):
+        if deep_research_requested:
+            request_kwargs = {"model": deep_model, "input": prompt}
+            if web_search_enabled:
+                request_kwargs["tools"] = [{"type": "web_search_preview"}]
+            try:
+                response = _call_openai_with_retries(
+                    client,
+                    request_kwargs,
+                    max_retries=max_retries,
+                    base_sleep_seconds=base_sleep_seconds,
+                )
+                model = deep_model
+                web_tool_type = "web_search_preview" if web_search_enabled else None
+                deep_research_effective = True
+                request_used = {
+                    "model": request_kwargs.get("model"),
+                    "tools": request_kwargs.get("tools"),
+                    "reasoning": request_kwargs.get("reasoning"),
+                }
+            except Exception as err:
+                if isinstance(err, RateLimitError):
+                    deep_research_error_reason = _format_error_reason(err)
+                elif not _is_model_not_found_error(err):
+                    raise
+                else:
+                    deep_research_error_reason = _format_error_reason(err)
+                model = base_model
+                web_tool_type = "web_search" if web_search_enabled else None
+                request_kwargs = {"model": model, "input": prompt}
+                if web_search_enabled:
+                    request_kwargs["tools"] = [{"type": "web_search"}]
+                if reasoning_effort is not None:
+                    request_kwargs["reasoning"] = {"effort": reasoning_effort}
+                request_used = {
+                    "model": request_kwargs.get("model"),
+                    "tools": request_kwargs.get("tools"),
+                    "reasoning": request_kwargs.get("reasoning"),
+                }
+                try:
+                    response = _call_openai_with_retries(
+                        client,
+                        request_kwargs,
+                        max_retries=max_retries,
+                        base_sleep_seconds=base_sleep_seconds,
+                    )
+                except RateLimitError as err_fallback:
+                    error_info = {"type": type(err_fallback).__name__, "message": str(err_fallback)}
+        else:
+            request_kwargs = {"model": model, "input": prompt}
+            if web_search_enabled:
+                request_kwargs["tools"] = [{"type": "web_search"}]
+            if reasoning_effort is not None:
+                request_kwargs["reasoning"] = {"effort": reasoning_effort}
+            request_used = {
+                "model": request_kwargs.get("model"),
+                "tools": request_kwargs.get("tools"),
+                "reasoning": request_kwargs.get("reasoning"),
+            }
+            try:
+                response = _call_openai_with_retries(
+                    client,
+                    request_kwargs,
+                    max_retries=max_retries,
+                    base_sleep_seconds=base_sleep_seconds,
+                )
+            except RateLimitError as err:
+                error_info = {"type": type(err).__name__, "message": str(err)}
+    effort_effective = None if deep_research_effective else reasoning_effort
 
     print(
         " ".join(
             [
                 f"model={model}",
-                f"effort={reasoning_effort}",
+                f"effort={effort_effective}",
                 f"web_search={web_search_enabled}",
-                f"deep_research={deep_research_enabled}",
+                f"deep_research_requested={deep_research_requested}",
+                f"deep_research_effective={deep_research_effective}",
+                f"web_tool_type={web_tool_type}",
             ]
         )
     )
-    log_step("Calling OpenAI (this can take a bit)")
-    with spinner("Waiting for OpenAI response"):
-        response = client.responses.create(**request_kwargs)
 
+
+    if response is None:
+        log_step("Saving outputs")
+        sources_path = output_dir_path / "sources_step1.json"
+        sources_payload = {
+            "prompt": prompt,
+            "model": model,
+            "reasoning_effort_requested": reasoning_effort,
+            "reasoning_effort_effective": effort_effective,
+            "web_search": web_search_enabled,
+            "deep_research_requested": deep_research_requested,
+            "deep_research_effective": deep_research_effective,
+            "deep_research_error_reason": deep_research_error_reason,
+            "web_tool_type": web_tool_type,
+            "request_used": request_used,
+            "error": error_info,
+        }
+        sources_path.write_text(
+            json.dumps(sources_payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        raise SystemExit(
+            "ERROR: OpenAI rate limit exceeded after retries. "
+            "Please try again later."
+        )
 
     output_text = getattr(response, "output_text", None)
     if output_text is None:
@@ -239,15 +377,16 @@ def generate_primer(output_dir: str | None = None, sheet: str = "Company and Ind
     sources_payload = {
         "prompt": prompt,
         "model": model,
-        "reasoning_effort": reasoning_effort,
+        "reasoning_effort_requested": reasoning_effort,
+        "reasoning_effort_effective": effort_effective,
         "web_search": web_search_enabled,
-        "deep_research": deep_research_enabled,
-        "web_tool_type": (
-            "web_search_preview" if deep_research_enabled else "web_search"
-        )
-        if web_search_enabled
-        else None,
+        "deep_research_requested": deep_research_requested,
+        "deep_research_effective": deep_research_effective,
+        "deep_research_error_reason": deep_research_error_reason,
+        "web_tool_type": web_tool_type,
+        "request_used": request_used,
         "response": _response_to_dict(response),
+        "error": error_info,
     }
     sources_path.write_text(json.dumps(sources_payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
