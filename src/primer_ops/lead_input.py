@@ -38,7 +38,8 @@ def prompt_float(label: str) -> float:
 
 
 def run_create_input() -> None:
-    load_dotenv(find_dotenv())
+    env_path = find_dotenv(usecwd=True)
+    load_dotenv(env_path, override=True)
     output_dir = get_output_dir()
 
     if not output_dir:

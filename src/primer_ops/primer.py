@@ -91,7 +91,11 @@ def _find_step1_anchor(ws, start_row: int = 1) -> Optional[Any]:
 
 
 def generate_primer(output_dir: str | None = None, sheet: str = "Company and Industry Intro") -> None:
-    load_dotenv(find_dotenv())
+    env_path = find_dotenv(usecwd=True)
+    load_dotenv(env_path, override=True)
+    # TEMP DEBUG
+    print(f"ENV_FILE={env_path}")
+    print(f"PROMPT_LIBRARY_PATH={os.getenv('PROMPT_LIBRARY_PATH','').strip()}")
     t0 = time.perf_counter()
     step = 0
     total_steps = 5
@@ -125,10 +129,12 @@ def generate_primer(output_dir: str | None = None, sheet: str = "Company and Ind
         raise SystemExit("ERROR: company_name missing from lead_input.json")
 
     prompt_path = Path(prompt_library_path)
+    log_step("Loading prompt library (Excel)")
     if not prompt_path.is_absolute():
         repo_root = Path(__file__).resolve().parents[2]
         prompt_path = repo_root / prompt_path
-        log_step("Loading prompt library (Excel)")
+    # TEMP DEBUG
+    print(f"PROMPT_LIBRARY_ABS={prompt_path}")
     workbook = load_workbook(prompt_path, data_only=True)
     if sheet not in workbook.sheetnames:
         raise SystemExit(f"ERROR: sheet not found: {sheet}")
