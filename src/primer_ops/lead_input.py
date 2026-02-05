@@ -15,7 +15,6 @@ class LeadInput(BaseModel):
     hq_country: str = Field(default="")
     industry: str = Field(default="")
     revenue_mln: float = Field(ge=0)
-    hq_location: str = Field(default="")
     primary_contact_name: str = Field(default="")
     primary_contact_role: str = Field(default="")
 
@@ -56,7 +55,6 @@ def run_create_input() -> None:
         "hq_country": prompt_str("HQ country (optional)", required=False),
         "industry": prompt_str("Industry (optional)", required=False),
         "revenue_mln": prompt_float("Revenue in EUR (mln)"),
-        "hq_location": prompt_str("HQ location (city, region) (optional)", required=False),
         "primary_contact_name": prompt_str("Primary contact name (optional)", required=False),
         "primary_contact_role": prompt_str("Primary contact role (optional)", required=False),
     }

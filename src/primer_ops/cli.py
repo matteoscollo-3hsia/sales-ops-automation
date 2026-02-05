@@ -11,7 +11,17 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("create-input", help="Create lead input interactively")
-    subparsers.add_parser("generate-primer", help="Generate primer")
+    gen_parser = subparsers.add_parser("generate-primer", help="Generate primer")
+    gen_parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Override OUTPUT_DIR from .env",
+    )
+    gen_parser.add_argument(
+        "--sheet",
+        default="Company and Industry Intro",
+        help="Excel sheet name (default: Company and Industry Intro)",
+    )
 
     args = parser.parse_args()
 
@@ -20,7 +30,7 @@ def main() -> int:
         return 0
 
     if args.command == "generate-primer":
-        generate_primer()
+        generate_primer(output_dir=args.output_dir, sheet=args.sheet)
         return 0
 
     parser.print_help()
