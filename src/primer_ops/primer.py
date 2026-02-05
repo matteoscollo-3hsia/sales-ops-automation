@@ -148,6 +148,23 @@ def _format_error_reason(err: Exception) -> str:
     return str(err)
 
 
+def _safe_write_text(path: Path, content: str) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        tmp_path.replace(path)
+    except OSError:
+        return
+
+
+def _safe_write_json(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        content = json.dumps(payload, indent=2, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return
+    _safe_write_text(path, content)
+
+
 def _call_openai_with_retries(
     client: OpenAI,
     request_kwargs: dict[str, Any],
@@ -281,7 +298,7 @@ def generate_primer(
     print(f"Sheets to run: {', '.join(selected_sheets)}")
 
     primer_sections: list[str] = ["# Commercial Primer"]
-    sources_payload = {
+    sources_payload: dict[str, Any] = {
         "prompt_library_path": str(prompt_path),
         "sheets": [],
     }
@@ -338,6 +355,8 @@ def generate_primer(
             "deep_research_error_reason": None,
             "steps": [],
         }
+        sources_payload.setdefault("sheets", [])
+        sources_payload["sheets"].append(sheet_entry)
 
         primer_sections.append(f"## {sheet_name}")
 
@@ -520,7 +539,7 @@ def generate_primer(
                             "# Company Introduction\n\n" + output_text.strip() + "\n",
                             encoding="utf-8",
                         )
-                    sources_payload = {
+                    legacy_sources_payload = {
                         "prompt": prompt,
                         "model": model,
                         "reasoning_effort_requested": reasoning_effort,
@@ -535,10 +554,11 @@ def generate_primer(
                         "error": error_info,
                     }
                     if not output_text or not output_text.strip():
-                        sources_payload["error"] = sources_payload["error"] or {}
-                        sources_payload["error"]["message"] = "No output returned for step 1."
+                        legacy_sources_payload["error"] = legacy_sources_payload["error"] or {}
+                        legacy_sources_payload["error"]["message"] = "No output returned for step 1."
                     sources_path.write_text(
-                        json.dumps(sources_payload, indent=2, ensure_ascii=False), encoding="utf-8"
+                        json.dumps(legacy_sources_payload, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
                     )
                     first_sheet_written = True
             except Exception as err:
@@ -547,19 +567,21 @@ def generate_primer(
                 primer_sections.append(f"Error: {err}")
 
             sheet_entry["steps"].append(step_entry)
+            primer_content = "\n\n".join(primer_sections).strip() + "\n"
+            _safe_write_text(output_dir_path / "primer.md", primer_content)
+            _safe_write_json(output_dir_path / "sources.json", sources_payload)
             step_number += 1
-
-        sources_payload["sheets"].append(sheet_entry)
 
     if not sources_payload["sheets"]:
         raise SystemExit("ERROR: no runnable sheets executed.")
 
     log_step("Saving outputs")
     primer_path = output_dir_path / "primer.md"
-    primer_path.write_text("\n\n".join(primer_sections).strip() + "\n", encoding="utf-8")
+    primer_content = "\n\n".join(primer_sections).strip() + "\n"
+    _safe_write_text(primer_path, primer_content)
 
     sources_path = output_dir_path / "sources.json"
-    sources_path.write_text(json.dumps(sources_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    _safe_write_json(sources_path, sources_payload)
 
     print(f"Saved: {primer_path}")
     print(f"Saved: {sources_path}")
