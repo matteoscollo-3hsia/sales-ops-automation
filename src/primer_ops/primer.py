@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional
 
 from primer_ops.progress import spinner, format_seconds
 from dotenv import find_dotenv, load_dotenv
-from openai import OpenAI, NotFoundError, RateLimitError
+from openai import APITimeoutError, OpenAI, NotFoundError, RateLimitError
 from openpyxl import load_workbook
 
 from primer_ops.config import get_output_dir
@@ -88,6 +88,7 @@ def _replace_placeholders(text: str, lead: dict[str, Any]) -> str:
     return updated
 
 
+_REQUEST_TIMEOUT_SECONDS = 30 * 60
 _REMINDER_LINE_RE = re.compile(r"^\s*\(here\s+copy\s+and\s+paste.*\)\s*$", re.IGNORECASE)
 _REMINDER_SENTENCE = "(here copy and paste introduction from 'company and industry intro' step 1)"
 _CONTEXT_HEADER_RE = re.compile(r"^\s*###\s*context\b", re.IGNORECASE)
@@ -273,6 +274,20 @@ def _safe_write_json(path: Path, payload: dict[str, Any]) -> None:
     _safe_write_text(path, content)
 
 
+def _confirm_continue_after_timeout() -> bool:
+    prompt = "Request timed out after 30 minutes. Continue and retry? [y/N]: "
+    while True:
+        try:
+            answer = input(prompt).strip().lower()
+        except EOFError:
+            return False
+        if answer in ("y", "yes"):
+            return True
+        if answer in ("n", "no", ""):
+            return False
+        print("Please answer y or n.")
+
+
 def _call_openai_with_retries(
     client: OpenAI,
     request_kwargs: dict[str, Any],
@@ -284,6 +299,11 @@ def _call_openai_with_retries(
     while True:
         try:
             return client.responses.create(**request_kwargs)
+        except APITimeoutError:
+            print(f"Request timed out after {int(_REQUEST_TIMEOUT_SECONDS / 60)} minutes.")
+            if _confirm_continue_after_timeout():
+                continue
+            raise SystemExit("Aborted after timeout.")
         except RateLimitError as err:
             msg = str(err).lower()
             code = getattr(err, "code", None)
@@ -426,7 +446,7 @@ def generate_primer(
     first_sheet_written = False
     prev_sheet_output_text = get_initial_context(output_dir_path)
     prev_sheet_name: str | None = "seed:intro" if prev_sheet_output_text.strip() else None
-    client = OpenAI()
+    client = OpenAI(timeout=_REQUEST_TIMEOUT_SECONDS)
 
     sheets_by_name: dict[str, dict[str, Any]] = {}
     for sheet_entry in sources_payload.get("sheets", []) or []:
