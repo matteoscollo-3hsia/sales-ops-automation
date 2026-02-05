@@ -32,6 +32,12 @@ def main() -> int:
         default=None,
         help="Regex or comma-separated list of sheet names to exclude",
     )
+    gen_parser.add_argument(
+        "--resume",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Resume from sources.json if present (default: True).",
+    )
 
     args = parser.parse_args()
 
@@ -45,6 +51,7 @@ def main() -> int:
             sheet=args.sheet,
             include=args.include,
             exclude=args.exclude,
+            resume=args.resume,
         )
         return 0
 
