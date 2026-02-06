@@ -10,12 +10,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="primer-ops")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("create-input", help="Create lead input interactively")
+    create_parser = subparsers.add_parser("create-input", help="Create lead input interactively")
+    create_parser.add_argument(
+        "--lead-output",
+        default=None,
+        help="Path to write lead_input.json (default: ./lead_input.json)",
+    )
     gen_parser = subparsers.add_parser("generate-primer", help="Generate primer")
     gen_parser.add_argument(
         "--output-dir",
         default=None,
-        help="Override OUTPUT_DIR from .env",
+        help="Override OUTPUT_BASE_DIR/OUTPUT_DIR from .env (use as final output folder)",
+    )
+    gen_parser.add_argument(
+        "--lead-input",
+        default=None,
+        help="Path to lead_input.json (default: ./lead_input.json or LEAD_INPUT_PATH)",
     )
     gen_parser.add_argument(
         "--sheet",
@@ -42,12 +52,13 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "create-input":
-        run_create_input()
+        run_create_input(lead_output=args.lead_output)
         return 0
 
     if args.command == "generate-primer":
         generate_primer(
             output_dir=args.output_dir,
+            lead_input=args.lead_input,
             sheet=args.sheet,
             include=args.include,
             exclude=args.exclude,

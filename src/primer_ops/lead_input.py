@@ -6,9 +6,6 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 
-from primer_ops.config import get_output_dir
-
-
 class LeadInput(BaseModel):
     company_name: str = Field(min_length=1)
     company_website: str = Field(default="")
@@ -37,18 +34,13 @@ def prompt_float(label: str) -> float:
             print("  -> Please enter a valid number (e.g., 75 or 75.5).")
 
 
-def run_create_input() -> None:
+def run_create_input(lead_output: str | None = None) -> None:
     env_path = find_dotenv(usecwd=True)
     load_dotenv(env_path, override=True)
-    output_dir = get_output_dir()
+    out_path = Path(lead_output) if lead_output else Path("lead_input.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not output_dir:
-        raise SystemExit("ERROR: OUTPUT_DIR is not set. Please set it in the .env file.")
-
-    dossier_dir = Path(output_dir) / "_dossier"
-    dossier_dir.mkdir(parents=True, exist_ok=True)
-
-    print("\n=== Lead Input Wizard (writes lead_input.json to the client folder) ===\n")
+    print("\n=== Lead Input Wizard (writes lead_input.json to the specified path) ===\n")
 
     data = {
         "company_name": prompt_str("Company name", required=True),
@@ -67,7 +59,6 @@ def run_create_input() -> None:
         print(e)
         raise SystemExit(1)
 
-    out_path = dossier_dir / "lead_input.json"
     out_path.write_text(
         json.dumps(lead.model_dump(), indent=2, ensure_ascii=False),
         encoding="utf-8",

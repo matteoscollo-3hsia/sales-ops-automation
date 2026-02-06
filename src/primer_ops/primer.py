@@ -12,7 +12,7 @@ from dotenv import find_dotenv, load_dotenv
 from openai import APITimeoutError, OpenAI, NotFoundError, RateLimitError
 from openpyxl import load_workbook
 
-from primer_ops.config import get_output_dir
+from primer_ops.config import get_lead_input_path, get_output_base_dir, get_output_dir
 
 def _normalize(text: str) -> str:
     return " ".join(text.strip().split()).lower()
@@ -93,6 +93,8 @@ _REMINDER_LINE_RE = re.compile(r"^\s*\(here\s+copy\s+and\s+paste.*\)\s*$", re.IG
 _REMINDER_SENTENCE = "(here copy and paste introduction from 'company and industry intro' step 1)"
 _CONTEXT_HEADER_RE = re.compile(r"^\s*###\s*context\b", re.IGNORECASE)
 _SECTION_HEADER_RE = re.compile(r"^\s*###\s+", re.IGNORECASE)
+_INVALID_FOLDER_CHARS_RE = re.compile(r"[<>:\"/\\\\|?*]")
+_MAX_FOLDER_NAME_LEN = 80
 
 
 def _strip_human_reminders(text: str) -> str:
@@ -107,6 +109,62 @@ def _strip_human_reminders(text: str) -> str:
             continue
         filtered.append(line)
     return "\n".join(filtered)
+
+
+def sanitize_folder_name(name: str) -> str:
+    if name is None:
+        return ""
+    cleaned = _INVALID_FOLDER_CHARS_RE.sub("", str(name))
+    cleaned = " ".join(cleaned.split())
+    cleaned = cleaned.rstrip(" .")
+    if _MAX_FOLDER_NAME_LEN and len(cleaned) > _MAX_FOLDER_NAME_LEN:
+        cleaned = cleaned[:_MAX_FOLDER_NAME_LEN].rstrip(" .")
+    return cleaned
+
+
+def _extract_company_name(lead: dict[str, Any]) -> str:
+    for key in ("company_name", "client"):
+        value = lead.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return "unknown_company"
+
+
+def _extract_output_dir_override(lead: dict[str, Any]) -> Path | None:
+    for key in ("client_output_dir", "output_dir"):
+        value = lead.get(key)
+        if isinstance(value, str) and value.strip():
+            return Path(value.strip())
+    return None
+
+
+def resolve_lead_input_path(lead_input: str | None) -> Path:
+    if lead_input and lead_input.strip():
+        return Path(lead_input.strip())
+    env_path = get_lead_input_path()
+    if env_path is not None:
+        return env_path
+    return Path("lead_input.json")
+
+
+def resolve_output_dir(output_dir: str | None, lead: dict[str, Any]) -> Path:
+    if output_dir and output_dir.strip():
+        return Path(output_dir.strip())
+    override = _extract_output_dir_override(lead)
+    if override is not None:
+        return override
+    base_dir = get_output_base_dir() or get_output_dir()
+    if base_dir is None:
+        raise SystemExit(
+            "ERROR: OUTPUT_BASE_DIR is not set. Please set it in the .env file. "
+            "(Legacy OUTPUT_DIR is also supported.)"
+        )
+    company_name = _extract_company_name(lead)
+    folder_name = sanitize_folder_name(company_name) or "unknown_company"
+    return base_dir / folder_name
 
 
 def _build_prev_context_block(
@@ -331,6 +389,7 @@ def generate_primer(
     include: str | None = None,
     exclude: str | None = None,
     resume: bool = True,
+    lead_input: str | None = None,
 ) -> None:
     env_path = find_dotenv(usecwd=True)
     load_dotenv(env_path, override=True)
@@ -343,9 +402,21 @@ def generate_primer(
         step += 1
         print(f"[{step}/{total_steps}] {msg}", flush=True)
 
-    resolved_output_dir = (output_dir or get_output_dir() or "").strip()
-    if not resolved_output_dir:
-        raise SystemExit("ERROR: OUTPUT_DIR is not set. Please set it in the .env file.")
+    lead_input_path = resolve_lead_input_path(lead_input)
+
+    log_step("Loading lead_input.json")
+    if not lead_input_path.exists():
+        raise SystemExit(
+            f"ERROR: lead_input.json not found at {lead_input_path}. "
+            "Use --lead-input or set LEAD_INPUT_PATH."
+        )
+    lead = json.loads(lead_input_path.read_text(encoding="utf-8"))
+    if not isinstance(lead, dict):
+        raise SystemExit("ERROR: lead_input.json must contain a JSON object.")
+
+    output_dir_path = resolve_output_dir(output_dir, lead)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+    print(f"Resolved output dir: {output_dir_path}")
 
     prompt_library_path = os.getenv("PROMPT_LIBRARY_PATH", "").strip()
     if not prompt_library_path:
@@ -356,17 +427,7 @@ def generate_primer(
     max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "").strip() or 6)
     base_sleep_seconds = float(os.getenv("OPENAI_RETRY_BASE_SECONDS", "").strip() or 0.5)
 
-    output_dir_path = Path(resolved_output_dir)
-    output_dir_path.mkdir(parents=True, exist_ok=True)
-    dossier_path = output_dir_path / "_dossier" / "lead_input.json"
-    if not dossier_path.exists():
-        raise SystemExit(f"ERROR: lead_input.json not found at {dossier_path}")
-
-    log_step("Loading lead_input.json")
-    lead = json.loads(dossier_path.read_text(encoding="utf-8"))
-    company_name = str(lead.get("company_name", "")).strip()
-    if not company_name:
-        raise SystemExit("ERROR: company_name missing from lead_input.json")
+    company_name = _extract_company_name(lead)
     lead_plus = dict(lead)
     lead_plus["client"] = company_name
     lead_plus["company"] = company_name
