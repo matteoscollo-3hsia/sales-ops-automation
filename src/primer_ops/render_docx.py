@@ -9,6 +9,7 @@ from typing import Any
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.shared import Pt
 from docx.text.paragraph import Paragraph
 
@@ -26,7 +27,10 @@ def render_primer_docx(
     doc, writer = _init_document(template_file)
     _apply_placeholder_replacements(doc, md_file)
     _apply_style_profile(doc)
-    tokens = _markdown_parser().parse(markdown_text)
+    parser = _markdown_parser()
+    parser_name = "markdown_it" if _is_markdown_it(parser) else "fallback"
+    print(f"DOCX parser: {parser_name}")
+    tokens = parser.parse(markdown_text)
     _render_tokens(tokens, doc, writer)
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -73,7 +77,7 @@ class _DocWriter:
 
 
 class _Token:
-    __slots__ = ("type", "tag", "content", "children")
+    __slots__ = ("type", "tag", "content", "children", "attrs")
 
     def __init__(
         self,
@@ -82,11 +86,13 @@ class _Token:
         tag: str = "",
         content: str = "",
         children: list["_Token"] | None = None,
+        attrs: list[tuple[str, str]] | None = None,
     ) -> None:
         self.type = token_type
         self.tag = tag
         self.content = content
         self.children = children or []
+        self.attrs = attrs or []
 
 
 class _FallbackMarkdownParser:
@@ -234,7 +240,106 @@ class _FallbackMarkdownParser:
         return [cell.strip() for cell in text.split("|")]
 
     def _inline_token(self, text: str) -> _Token:
-        return _Token("inline", children=[_Token("text", content=text or "")])
+        children = self._parse_inline_children(text or "")
+        if not children:
+            children = [_Token("text", content="")]
+        return _Token("inline", children=children)
+
+    def _parse_inline_children(self, text: str) -> list[_Token]:
+        tokens: list[_Token] = []
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "`":
+                end = text.find("`", i + 1)
+                if end == -1:
+                    tokens.append(_Token("text", content="`"))
+                    i += 1
+                    continue
+                tokens.append(_Token("code_inline", content=text[i + 1 : end]))
+                i = end + 1
+                continue
+
+            if ch == "[":
+                link = self._parse_link(text, i)
+                if link is not None:
+                    label, url, next_i = link
+                    tokens.append(_Token("link_open", attrs=[("href", url)]))
+                    if label:
+                        tokens.extend(self._parse_inline_children(label))
+                    tokens.append(_Token("link_close"))
+                    i = next_i
+                    continue
+
+            if text.startswith("**", i) or text.startswith("__", i):
+                delim = text[i : i + 2]
+                if self._is_emphasis_candidate(text, i, 2):
+                    end = self._find_delim(text, i + 2, delim)
+                    if end is not None:
+                        inner = text[i + 2 : end]
+                        if inner:
+                            tokens.append(_Token("strong_open"))
+                            tokens.extend(self._parse_inline_children(inner))
+                            tokens.append(_Token("strong_close"))
+                            i = end + 2
+                            continue
+
+            if ch in ("*", "_"):
+                if self._is_emphasis_candidate(text, i, 1):
+                    end = self._find_delim(text, i + 1, ch)
+                    if end is not None:
+                        inner = text[i + 1 : end]
+                        if inner:
+                            tokens.append(_Token("em_open"))
+                            tokens.extend(self._parse_inline_children(inner))
+                            tokens.append(_Token("em_close"))
+                            i = end + 1
+                            continue
+
+            start = i
+            i += 1
+            while i < len(text) and text[i] not in "`[*_":
+                i += 1
+            tokens.append(_Token("text", content=text[start:i]))
+
+        return self._merge_text_tokens(tokens)
+
+    def _parse_link(self, text: str, start: int) -> tuple[str, str, int] | None:
+        end_label = text.find("]", start + 1)
+        if end_label == -1:
+            return None
+        if end_label + 1 >= len(text) or text[end_label + 1] != "(":
+            return None
+        end_url = text.find(")", end_label + 2)
+        if end_url == -1:
+            return None
+        label = text[start + 1 : end_label]
+        url = text[end_label + 2 : end_url]
+        return label, url, end_url + 1
+
+    def _find_delim(self, text: str, start: int, delim: str) -> int | None:
+        end = text.find(delim, start)
+        if end == -1:
+            return None
+        if end == start:
+            return None
+        return end
+
+    def _is_emphasis_candidate(self, text: str, index: int, delim_len: int) -> bool:
+        prev = text[index - 1] if index > 0 else ""
+        next_char = text[index + delim_len] if index + delim_len < len(text) else ""
+        if prev.isalnum() and next_char.isalnum():
+            return False
+        return True
+
+    def _merge_text_tokens(self, tokens: list[_Token]) -> list[_Token]:
+        merged: list[_Token] = []
+        for token in tokens:
+            if token.type != "text" or not merged or merged[-1].type != "text":
+                merged.append(token)
+            else:
+                merged[-1].content += token.content
+        return merged
 
     def _heading_tokens(self, level: int, text: str) -> list[_Token]:
         tag = f"h{level}"
@@ -282,6 +387,10 @@ def _markdown_parser() -> Any:
     md = MarkdownIt("commonmark", {"breaks": False, "html": False})
     md.enable("table")
     return md
+
+
+def _is_markdown_it(parser: Any) -> bool:
+    return parser.__class__.__name__ == "MarkdownIt"
 
 
 def _init_document(template_path: Path | None) -> tuple[Document, _DocWriter]:
@@ -454,20 +563,89 @@ def _add_paragraph(
 
 
 def _add_runs(paragraph: Paragraph, runs: list[dict[str, Any]]) -> None:
-    for run_spec in runs:
+    i = 0
+    while i < len(runs):
+        run_spec = runs[i]
         if run_spec.get("break"):
             paragraph.add_run().add_break()
+            i += 1
             continue
+        link_url = run_spec.get("link_url")
+        if link_url:
+            group: list[dict[str, Any]] = []
+            while i < len(runs):
+                current = runs[i]
+                if current.get("break") or current.get("link_url") != link_url:
+                    break
+                group.append(current)
+                i += 1
+            if _add_hyperlink_runs(paragraph, group, link_url):
+                continue
+            for item in group:
+                _add_plain_run(paragraph, item)
+            paragraph.add_run(f" ({link_url})")
+            continue
+
+        _add_plain_run(paragraph, run_spec)
+        i += 1
+
+
+def _add_plain_run(paragraph: Paragraph, run_spec: dict[str, Any]) -> None:
+    text = run_spec.get("text", "")
+    if not text:
+        return
+    run = paragraph.add_run(text)
+    if run_spec.get("bold"):
+        run.bold = True
+    if run_spec.get("italic"):
+        run.italic = True
+    if run_spec.get("code"):
+        run.font.name = "Consolas"
+
+
+def _add_hyperlink_runs(
+    paragraph: Paragraph, run_specs: list[dict[str, Any]], link_url: str
+) -> bool:
+    if not link_url:
+        return False
+    try:
+        part = paragraph.part
+        rel_id = part.relate_to(link_url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    except Exception:
+        return False
+
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), rel_id)
+    for run_spec in run_specs:
         text = run_spec.get("text", "")
         if not text:
             continue
-        run = paragraph.add_run(text)
-        if run_spec.get("bold"):
-            run.bold = True
-        if run_spec.get("italic"):
-            run.italic = True
-        if run_spec.get("code"):
-            run.font.name = "Consolas"
+        run = OxmlElement("w:r")
+        r_pr = _build_run_properties(run_spec)
+        if r_pr is not None:
+            run.append(r_pr)
+        text_el = OxmlElement("w:t")
+        text_el.text = text
+        run.append(text_el)
+        hyperlink.append(run)
+    paragraph._p.append(hyperlink)
+    return True
+
+
+def _build_run_properties(run_spec: dict[str, Any]) -> OxmlElement | None:
+    r_pr = OxmlElement("w:rPr")
+    if run_spec.get("bold"):
+        r_pr.append(OxmlElement("w:b"))
+    if run_spec.get("italic"):
+        r_pr.append(OxmlElement("w:i"))
+    if run_spec.get("code"):
+        r_fonts = OxmlElement("w:rFonts")
+        r_fonts.set(qn("w:ascii"), "Consolas")
+        r_fonts.set(qn("w:hAnsi"), "Consolas")
+        r_pr.append(r_fonts)
+    if len(r_pr) == 0:
+        return None
+    return r_pr
 
 
 def _add_code_block(writer: _DocWriter, content: str, style: str | None) -> None:
@@ -486,6 +664,7 @@ def _inline_runs(inline_token: Any | None) -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     bold = False
     italic = False
+    link_url: str | None = None
     for child in inline_token.children:
         token_type = child.type
         if token_type == "strong_open":
@@ -500,14 +679,20 @@ def _inline_runs(inline_token: Any | None) -> list[dict[str, Any]]:
         if token_type == "em_close":
             italic = False
             continue
+        if token_type == "link_open":
+            link_url = _extract_link_url(child)
+            continue
+        if token_type == "link_close":
+            link_url = None
+            continue
         if token_type == "code_inline":
-            _append_run(runs, child.content, False, False, True)
+            _append_run(runs, child.content, False, False, True, link_url)
             continue
         if token_type == "text":
-            _append_run(runs, child.content, bold, italic, False)
+            _append_run(runs, child.content, bold, italic, False, link_url)
             continue
         if token_type == "softbreak":
-            _append_run(runs, " ", bold, italic, False)
+            _append_run(runs, " ", bold, italic, False, link_url)
             continue
         if token_type == "hardbreak":
             runs.append({"break": True})
@@ -517,7 +702,7 @@ def _inline_runs(inline_token: Any | None) -> list[dict[str, Any]]:
             placeholder = "TODO: image omitted"
             if alt_text:
                 placeholder = f"TODO: image omitted ({alt_text})"
-            _append_run(runs, placeholder, bold, italic, False)
+            _append_run(runs, placeholder, bold, italic, False, link_url)
             continue
         if token_type in ("link_open", "link_close"):
             continue
@@ -525,7 +710,12 @@ def _inline_runs(inline_token: Any | None) -> list[dict[str, Any]]:
 
 
 def _append_run(
-    runs: list[dict[str, Any]], text: str, bold: bool, italic: bool, code: bool
+    runs: list[dict[str, Any]],
+    text: str,
+    bold: bool,
+    italic: bool,
+    code: bool,
+    link_url: str | None,
 ) -> None:
     if not text:
         return
@@ -536,10 +726,29 @@ def _append_run(
             and last.get("bold") == bold
             and last.get("italic") == italic
             and last.get("code") == code
+            and last.get("link_url") == link_url
         ):
             last["text"] = f"{last.get('text', '')}{text}"
             return
-    runs.append({"text": text, "bold": bold, "italic": italic, "code": code})
+    runs.append(
+        {
+            "text": text,
+            "bold": bold,
+            "italic": italic,
+            "code": code,
+            "link_url": link_url,
+        }
+    )
+
+
+def _extract_link_url(token: Any) -> str | None:
+    attrs = getattr(token, "attrs", None)
+    if not attrs:
+        return None
+    try:
+        return dict(attrs).get("href")
+    except Exception:
+        return None
 
 
 def _apply_placeholder_replacements(doc: Document, md_file: Path) -> None:

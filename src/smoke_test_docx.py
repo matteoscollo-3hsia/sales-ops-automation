@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE
 from dotenv import find_dotenv, load_dotenv
 
 from primer_ops.render_docx import render_primer_docx
@@ -62,6 +63,35 @@ def _assert_heading_styles() -> None:
             ), f"Heading 2 style mismatch: {subsection_para.style.name}"
 
 
+def _assert_inline_markdown_render() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        md_path = tmp_path / "inline.md"
+        docx_path = tmp_path / "inline.docx"
+        md_path.write_text(
+            "Paragraph with **bold** and *italic* and [site](https://example.com) "
+            "plus ([site](https://example.com)).\n",
+            encoding="utf-8",
+        )
+        render_primer_docx(str(md_path), str(docx_path), None)
+        doc = Document(str(docx_path))
+        full_text = "\n".join(paragraph.text for paragraph in doc.paragraphs)
+        assert "**" not in full_text, "Raw bold markers leaked into DOCX text."
+        assert "](" not in full_text, "Raw link markers leaked into DOCX text."
+        doc_xml = doc.element.xml
+        assert (
+            "site" in full_text or "site" in doc_xml
+        ), "Expected link label text missing."
+
+        has_url_text = "https://example.com" in full_text
+        has_hyperlink_rel = any(
+            rel.reltype == RELATIONSHIP_TYPE.HYPERLINK
+            and rel.target_ref == "https://example.com"
+            for rel in doc.part.rels.values()
+        )
+        assert has_url_text or has_hyperlink_rel, "Expected link URL not found."
+
+
 def _resolve_latest_md_path(lead_input: str | None, output_dir: str | None) -> Path:
     lead_path = resolve_lead_input_path(lead_input)
     if not lead_path.exists():
@@ -92,6 +122,7 @@ def main() -> None:
 
     load_dotenv(find_dotenv(usecwd=True), override=False)
     _assert_heading_styles()
+    _assert_inline_markdown_render()
     md_path = _resolve_latest_md_path(args.lead_input, args.output_dir)
     docx_path = md_path.with_suffix(".docx")
     template_path = os.getenv("PRIMER_WORD_TEMPLATE_PATH", "").strip() or None
