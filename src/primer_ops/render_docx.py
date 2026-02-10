@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import date
 import json
+import re
 from typing import Any
 
 from docx import Document
@@ -10,7 +11,6 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt
 from docx.text.paragraph import Paragraph
-from markdown_it import MarkdownIt
 
 PLACEHOLDER = "{{CONTENT}}"
 
@@ -72,7 +72,213 @@ class _DocWriter:
         return table
 
 
-def _markdown_parser() -> MarkdownIt:
+class _Token:
+    __slots__ = ("type", "tag", "content", "children")
+
+    def __init__(
+        self,
+        token_type: str,
+        *,
+        tag: str = "",
+        content: str = "",
+        children: list["_Token"] | None = None,
+    ) -> None:
+        self.type = token_type
+        self.tag = tag
+        self.content = content
+        self.children = children or []
+
+
+class _FallbackMarkdownParser:
+    _table_sep_re = re.compile(r"^:?-{3,}:?$")
+
+    def parse(self, markdown_text: str) -> list[_Token]:
+        lines = (markdown_text or "").splitlines()
+        tokens: list[_Token] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if not line.strip():
+                i += 1
+                continue
+
+            heading = self._parse_heading_line(line)
+            if heading is not None:
+                level, text = heading
+                tokens.extend(self._heading_tokens(level, text))
+                i += 1
+                continue
+
+            table = self._parse_table(lines, i)
+            if table is not None:
+                table_tokens, next_i = table
+                tokens.extend(table_tokens)
+                i = next_i
+                continue
+
+            if self._is_bullet_item(line):
+                list_tokens, next_i = self._parse_bullet_list(lines, i)
+                tokens.extend(list_tokens)
+                i = next_i
+                continue
+
+            paragraph_text, next_i = self._parse_paragraph(lines, i)
+            tokens.extend(self._paragraph_tokens(paragraph_text))
+            i = next_i
+
+        return tokens
+
+    def _parse_heading_line(self, line: str) -> tuple[int, str] | None:
+        match = re.match(r"^(#{1,3})\s+(.*)$", line.strip())
+        if not match:
+            return None
+        hashes, text = match.groups()
+        level = min(3, len(hashes))
+        return level, (text or "").strip()
+
+    def _is_bullet_item(self, line: str) -> bool:
+        return bool(re.match(r"^\s*[-*]\s+\S", line))
+
+    def _parse_bullet_list(self, lines: list[str], start: int) -> tuple[list[_Token], int]:
+        tokens: list[_Token] = [_Token("bullet_list_open")]
+        i = start
+        while i < len(lines):
+            line = lines[i]
+            if not line.strip():
+                break
+            match = re.match(r"^\s*[-*]\s+(.*)$", line)
+            if not match:
+                break
+            item_text = (match.group(1) or "").strip()
+            i += 1
+            # Continuation lines that are indented and not a new bullet.
+            while i < len(lines):
+                cont = lines[i]
+                if not cont.strip():
+                    break
+                if self._is_bullet_item(cont) or self._parse_heading_line(cont) is not None:
+                    break
+                if cont.startswith("  ") or cont.startswith("\t"):
+                    item_text = (item_text + " " + cont.strip()).strip()
+                    i += 1
+                    continue
+                break
+            tokens.append(_Token("list_item_open"))
+            tokens.extend(self._paragraph_tokens(item_text))
+            tokens.append(_Token("list_item_close"))
+        tokens.append(_Token("bullet_list_close"))
+        return tokens, i
+
+    def _parse_paragraph(self, lines: list[str], start: int) -> tuple[str, int]:
+        parts: list[str] = []
+        i = start
+        while i < len(lines):
+            line = lines[i]
+            if not line.strip():
+                break
+            if self._parse_heading_line(line) is not None:
+                break
+            if self._is_bullet_item(line):
+                break
+            table = self._parse_table(lines, i)
+            if table is not None:
+                break
+            parts.append(line.strip())
+            i += 1
+        return " ".join(parts).strip(), i
+
+    def _parse_table(self, lines: list[str], start: int) -> tuple[list[_Token], int] | None:
+        if start + 1 >= len(lines):
+            return None
+        header_line = lines[start].rstrip()
+        sep_line = lines[start + 1].rstrip()
+        if "|" not in header_line or "|" not in sep_line:
+            return None
+        header_cells = self._split_pipe_row(header_line)
+        sep_cells = self._split_pipe_row(sep_line)
+        if not header_cells or not sep_cells:
+            return None
+        if len(header_cells) != len(sep_cells):
+            return None
+        if not all(self._table_sep_re.match(cell.replace(" ", "")) for cell in sep_cells):
+            return None
+
+        rows: list[list[str]] = [header_cells]
+        i = start + 2
+        while i < len(lines):
+            line = lines[i].rstrip()
+            if not line.strip():
+                break
+            if "|" not in line:
+                break
+            row_cells = self._split_pipe_row(line)
+            if not row_cells:
+                break
+            # Normalize row width to header width.
+            if len(row_cells) < len(header_cells):
+                row_cells = row_cells + [""] * (len(header_cells) - len(row_cells))
+            elif len(row_cells) > len(header_cells):
+                row_cells = row_cells[: len(header_cells)]
+            rows.append(row_cells)
+            i += 1
+
+        tokens = self._table_tokens(rows)
+        return tokens, i
+
+    def _split_pipe_row(self, line: str) -> list[str]:
+        text = line.strip()
+        if text.startswith("|"):
+            text = text[1:]
+        if text.endswith("|"):
+            text = text[:-1]
+        return [cell.strip() for cell in text.split("|")]
+
+    def _inline_token(self, text: str) -> _Token:
+        return _Token("inline", children=[_Token("text", content=text or "")])
+
+    def _heading_tokens(self, level: int, text: str) -> list[_Token]:
+        tag = f"h{level}"
+        return [
+            _Token("heading_open", tag=tag),
+            self._inline_token(text),
+            _Token("heading_close", tag=tag),
+        ]
+
+    def _paragraph_tokens(self, text: str) -> list[_Token]:
+        return [
+            _Token("paragraph_open", tag="p"),
+            self._inline_token(text),
+            _Token("paragraph_close", tag="p"),
+        ]
+
+    def _table_tokens(self, rows: list[list[str]]) -> list[_Token]:
+        tokens: list[_Token] = [_Token("table_open")]
+        if not rows:
+            tokens.append(_Token("table_close"))
+            return tokens
+        header = rows[0]
+        tokens.append(_Token("tr_open"))
+        for cell in header:
+            tokens.append(_Token("th_open"))
+            tokens.append(self._inline_token(cell))
+            tokens.append(_Token("th_close"))
+        tokens.append(_Token("tr_close"))
+        for row in rows[1:]:
+            tokens.append(_Token("tr_open"))
+            for cell in row:
+                tokens.append(_Token("td_open"))
+                tokens.append(self._inline_token(cell))
+                tokens.append(_Token("td_close"))
+            tokens.append(_Token("tr_close"))
+        tokens.append(_Token("table_close"))
+        return tokens
+
+
+def _markdown_parser() -> Any:
+    try:
+        from markdown_it import MarkdownIt  # type: ignore
+    except ImportError:
+        return _FallbackMarkdownParser()
     md = MarkdownIt("commonmark", {"breaks": False, "html": False})
     md.enable("table")
     return md
@@ -99,15 +305,9 @@ def _init_document(template_path: Path | None) -> tuple[Document, _DocWriter]:
 
 
 def _ensure_template(template_path: Path) -> None:
-    if template_path.exists():
-        return
-    template_path.parent.mkdir(parents=True, exist_ok=True)
-    doc = Document()
-    doc.add_paragraph("{{COMPANY}} – Commercial Primer")
-    doc.add_paragraph("Date: {{DATE}}")
-    doc.add_page_break()
-    doc.add_paragraph(PLACEHOLDER)
-    _save_docx_atomic(doc, template_path)
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_path}")
+
 
 
 def _find_placeholder_paragraph(doc: Document, placeholder: str) -> Paragraph | None:
@@ -491,15 +691,74 @@ def _apply_table_profile(table, doc: Document) -> None:
     tbl_w.set(qn("w:type"), "pct")
     tbl_w.set(qn("w:w"), "5000")
 
-    if table.columns and len(table.columns) == 2:
-        section = doc.sections[0]
-        total_width = section.page_width - section.left_margin - section.right_margin
-        half_width = int(total_width / 2)
-        for col in table.columns:
-            col.width = half_width
+    section = doc.sections[0]
+    total_width_emu = int(section.page_width - section.left_margin - section.right_margin)
+    total_twips = max(1, int(round(total_width_emu / 635.0)))
+
+    col_count = len(table.columns) if table.columns else 0
+    if col_count <= 0:
+        return
+
+    widths_twips = _compute_table_col_widths_twips(table, total_twips, col_count)
+    widths_emu = [max(1, int(w * 635)) for w in widths_twips]
+
+    _set_tbl_grid(table, widths_twips)
+    for idx, col in enumerate(table.columns):
+        col.width = widths_emu[idx]
+    for row in table.rows:
+        for idx, cell in enumerate(row.cells):
+            try:
+                cell.width = widths_emu[idx]
+            except Exception:
+                pass
+            _tighten_table_cell(cell)
 
     if table.rows:
         _set_header_repeat(table.rows[0])
+
+
+def _compute_table_col_widths_twips(table, total_twips: int, col_count: int) -> list[int]:
+    if col_count == 1:
+        return [total_twips]
+    if col_count == 2 and table.rows:
+        left = (table.cell(0, 0).text or "").strip().lower()
+        right = (table.cell(0, 1).text or "").strip().lower()
+        if left == "name" and right == "description":
+            first = int(total_twips * 0.30)
+            return [first, total_twips - first]
+        first = total_twips // 2
+        return [first, total_twips - first]
+    base = total_twips // col_count
+    widths = [base] * col_count
+    widths[-1] += total_twips - (base * col_count)
+    return widths
+
+
+def _set_tbl_grid(table, widths_twips: list[int]) -> None:
+    tbl = table._tbl
+    tbl_grid = tbl.find(qn("w:tblGrid"))
+    if tbl_grid is None:
+        tbl_grid = OxmlElement("w:tblGrid")
+        # Ensure tblGrid is placed after tblPr.
+        insert_at = 1 if tbl.tblPr is not None else 0
+        tbl.insert(insert_at, tbl_grid)
+    else:
+        for child in list(tbl_grid):
+            tbl_grid.remove(child)
+    for width in widths_twips:
+        grid_col = OxmlElement("w:gridCol")
+        grid_col.set(qn("w:w"), str(max(1, int(width))))
+        tbl_grid.append(grid_col)
+
+
+def _tighten_table_cell(cell) -> None:
+    # Remove trailing empty paragraphs and force compact spacing.
+    while len(cell.paragraphs) > 1 and not (cell.paragraphs[-1].text or "").strip():
+        _remove_paragraph(cell.paragraphs[-1])
+    for paragraph in cell.paragraphs:
+        fmt = paragraph.paragraph_format
+        fmt.space_before = Pt(0)
+        fmt.space_after = Pt(0)
 
 
 def _set_header_repeat(row) -> None:

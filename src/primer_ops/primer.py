@@ -97,6 +97,7 @@ _REMINDER_LINE_RE = re.compile(r"^\s*\(here\s+copy\s+and\s+paste.*\)\s*$", re.IG
 _REMINDER_SENTENCE = "(here copy and paste introduction from 'company and industry intro' step 1)"
 _CONTEXT_HEADER_RE = re.compile(r"^\s*###\s*context\b", re.IGNORECASE)
 _SECTION_HEADER_RE = re.compile(r"^\s*###\s+", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://[^\s)>\"]+", re.IGNORECASE)
 
 
 def _strip_human_reminders(text: str) -> str:
@@ -234,20 +235,249 @@ def _extract_output_text_from_response(response: Any) -> str | None:
         if isinstance(output_text, str) and output_text.strip():
             return output_text
         for item in response.get("output", []) or []:
-            if isinstance(item, dict) and item.get("type") == "output_text" and item.get("text"):
-                return item["text"]
+            text = _extract_output_text_from_item(item)
+            if text:
+                return text
+        return None
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text
+    output_items = getattr(response, "output", None)
+    if isinstance(output_items, list):
+        for item in output_items:
+            text = _extract_output_text_from_item(item)
+            if text:
+                return text
     return None
 
 
-def _ensure_output_text(step_entry: dict[str, Any]) -> str | None:
-    existing = step_entry.get("output_text")
+def _extract_output_text_from_item(item: Any) -> str | None:
+    if item is None:
+        return None
+    if isinstance(item, dict):
+        item_type = item.get("type")
+        if item_type == "output_text":
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                return text
+        content = item.get("content")
+        if isinstance(content, list):
+            for part in content:
+                text = _extract_output_text_from_item(part)
+                if text:
+                    return text
+    else:
+        item_type = getattr(item, "type", None)
+        if item_type == "output_text":
+            text = getattr(item, "text", None)
+            if isinstance(text, str) and text.strip():
+                return text
+        content = getattr(item, "content", None)
+        if isinstance(content, list):
+            for part in content:
+                text = _extract_output_text_from_item(part)
+                if text:
+                    return text
+    return None
+
+
+def _extract_urls_from_text(text: str) -> list[str]:
+    if not text:
+        return []
+    urls: list[str] = []
+    for match in _URL_RE.findall(text):
+        cleaned = match.rstrip(").,]")
+        if cleaned:
+            urls.append(cleaned)
+    return urls
+
+
+def _extract_citations_from_response(
+    response: Any, output_text: str | None = None
+) -> list[str]:
+    urls: list[str] = []
+
+    def add_url(value: Any) -> None:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                urls.append(cleaned)
+
+    def walk(obj: Any) -> None:
+        if obj is None:
+            return
+        if isinstance(obj, dict):
+            add_url(obj.get("url"))
+            add_url(obj.get("source_url"))
+            add_url(obj.get("source"))
+            annotations = obj.get("annotations")
+            if isinstance(annotations, list):
+                for item in annotations:
+                    walk(item)
+            content = obj.get("content")
+            if isinstance(content, list):
+                for item in content:
+                    walk(item)
+        else:
+            add_url(getattr(obj, "url", None))
+            add_url(getattr(obj, "source_url", None))
+            add_url(getattr(obj, "source", None))
+            annotations = getattr(obj, "annotations", None)
+            if isinstance(annotations, list):
+                for item in annotations:
+                    walk(item)
+            content = getattr(obj, "content", None)
+            if isinstance(content, list):
+                for item in content:
+                    walk(item)
+
+    output_items = None
+    if isinstance(response, dict):
+        output_items = response.get("output")
+    else:
+        output_items = getattr(response, "output", None)
+    if isinstance(output_items, list):
+        for item in output_items:
+            walk(item)
+    if output_text:
+        urls.extend(_extract_urls_from_text(output_text))
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(url)
+    return deduped
+
+
+def _ensure_response_text(step_entry: dict[str, Any]) -> str | None:
+    existing = step_entry.get("response_text")
     if isinstance(existing, str) and existing.strip():
         return existing
+    legacy = step_entry.get("output_text")
+    if isinstance(legacy, str) and legacy.strip():
+        step_entry["response_text"] = legacy
+        return legacy
     derived = _extract_output_text_from_response(step_entry.get("response"))
     if isinstance(derived, str) and derived.strip():
-        step_entry["output_text"] = derived
+        step_entry["response_text"] = derived
         return derived
     return None
+
+
+def _coerce_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def _coerce_str_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                items.append(item.strip())
+        return items
+    return []
+
+
+def _sanitize_sources_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"prompt_library_path": "", "sheets": []}
+    sanitized: dict[str, Any] = {
+        "prompt_library_path": str(payload.get("prompt_library_path", "") or ""),
+        "sheets": [],
+    }
+    sheets = payload.get("sheets")
+    if not isinstance(sheets, list):
+        return sanitized
+    for sheet in sheets:
+        if not isinstance(sheet, dict):
+            continue
+        name = sheet.get("name")
+        if not isinstance(name, str):
+            continue
+        sanitized_sheet: dict[str, Any] = {
+            "name": name,
+            "web_search": _coerce_bool(sheet.get("web_search"), False),
+            "deep_research_requested": _coerce_bool(sheet.get("deep_research_requested"), False),
+            "deep_research_effective": _coerce_bool(sheet.get("deep_research_effective"), False),
+            "deep_research_error_reason": _coerce_str(sheet.get("deep_research_error_reason")),
+            "steps": [],
+        }
+        steps = sheet.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                step_number = _coerce_int(step.get("step_number"))
+                if step_number is None:
+                    continue
+                prompt = _coerce_str(step.get("prompt"))
+                if not prompt:
+                    prompt = _coerce_str(step.get("prompt_final")) or _coerce_str(
+                        step.get("prompt_original")
+                    )
+                response_text = _coerce_str(step.get("response_text"))
+                if not response_text:
+                    response_text = _coerce_str(step.get("output_text"))
+                if not response_text:
+                    response_text = _extract_output_text_from_response(step.get("response")) or ""
+                error_value = step.get("error")
+                if isinstance(error_value, dict):
+                    error_value = error_value.get("message") or error_value.get("type")
+                error_message = _coerce_str(error_value)
+                citations = _coerce_str_list(step.get("citations") or step.get("urls"))
+                sanitized_step: dict[str, Any] = {
+                    "step_number": step_number,
+                    "title": _coerce_str(step.get("title")) or f"Step {step_number}",
+                    "prompt": prompt,
+                    "response_text": response_text or "",
+                    "model": _coerce_str(step.get("model")),
+                    "reasoning_effort_requested": _coerce_str(
+                        step.get("reasoning_effort_requested") or step.get("reasoning_effort")
+                    ),
+                    "reasoning_effort_effective": _coerce_str(step.get("reasoning_effort_effective")),
+                    "web_search": _coerce_bool(step.get("web_search"), sanitized_sheet["web_search"]),
+                    "deep_research_requested": _coerce_bool(
+                        step.get("deep_research_requested"),
+                        sanitized_sheet["deep_research_requested"],
+                    ),
+                    "deep_research_effective": _coerce_bool(step.get("deep_research_effective"), False),
+                    "deep_research_error_reason": _coerce_str(step.get("deep_research_error_reason")),
+                    "web_tool_type": _coerce_str(step.get("web_tool_type")),
+                    "error": error_message,
+                }
+                if citations:
+                    sanitized_step["citations"] = citations
+                sanitized_sheet["steps"].append(sanitized_step)
+        sanitized["sheets"].append(sanitized_sheet)
+    return sanitized
 
 
 def _model_supports_reasoning_effort(model: str | None) -> bool:
@@ -269,42 +499,40 @@ def _error_is_empty(error: Any) -> bool:
 def _step_is_completed(step_entry: dict[str, Any]) -> bool:
     if not _error_is_empty(step_entry.get("error")):
         return False
-    output_text = _ensure_output_text(step_entry) or ""
-    return bool(output_text.strip())
+    response_text = _ensure_response_text(step_entry) or ""
+    return bool(response_text.strip())
 
 
-def get_initial_context(output_dir_path: Path) -> str:
-    primer_path = output_dir_path / "primer_step1_company_introduction.md"
-    if primer_path.exists():
-        try:
-            text = primer_path.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
-        lines = text.splitlines()
-        if lines and lines[0].lstrip().startswith("#"):
-            lines = lines[1:]
-        return "\n".join(lines).strip()
-    return ""
-
-
-def _response_to_dict(response: Any) -> dict[str, Any]:
-    if hasattr(response, "model_dump"):
-        return response.model_dump()
-    if hasattr(response, "dict"):
-        return response.dict()
-    if isinstance(response, dict):
-        return response
-    return {"raw": str(response)}
-
-
-def _find_step1_anchor(ws, start_row: int = 1) -> Optional[Any]:
-    pattern = re.compile(r"^step\s*1(\D|$)", re.IGNORECASE)
-    for cell in _iter_cells(ws):
-        if cell.row < start_row:
+def get_initial_context(sources_payload: dict[str, Any]) -> str:
+    if not isinstance(sources_payload, dict):
+        return ""
+    sheets = sources_payload.get("sheets")
+    if not isinstance(sheets, list):
+        return ""
+    for sheet_entry in sheets:
+        if not isinstance(sheet_entry, dict):
             continue
-        if isinstance(cell.value, str) and pattern.search(cell.value.strip()):
-            return cell
-    return None
+        steps = sheet_entry.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for step_entry in steps:
+            if not isinstance(step_entry, dict):
+                continue
+            step_number = step_entry.get("step_number")
+            try:
+                step_number = int(step_number)
+            except (TypeError, ValueError):
+                step_number = None
+            if step_number != 1:
+                continue
+            text = _ensure_response_text(step_entry) or ""
+            if not text:
+                continue
+            lines = text.splitlines()
+            if lines and lines[0].lstrip().startswith("#"):
+                lines = lines[1:]
+            return "\n".join(lines).strip()
+    return ""
 
 
 def _find_step_anchor(ws, step_number: int, start_row: int = 1) -> Optional[Any]:
@@ -372,6 +600,30 @@ def _safe_write_text_multi(paths: Iterable[Path], content: str) -> None:
 def _safe_write_json_multi(paths: Iterable[Path], payload: dict[str, Any]) -> None:
     for path in paths:
         _safe_write_json(path, payload)
+
+
+def _resolve_template_path() -> Path:
+    template_path_value = os.getenv("PRIMER_WORD_TEMPLATE_PATH", "").strip()
+    if not template_path_value:
+        raise SystemExit(
+            "ERROR: PRIMER_WORD_TEMPLATE_PATH is not set. DOCX output is required."
+        )
+    candidate = Path(template_path_value)
+    if not candidate.is_absolute():
+        repo_root = Path(__file__).resolve().parents[2]
+        candidate = repo_root / candidate
+    if not candidate.exists():
+        raise SystemExit(f"ERROR: PRIMER_WORD_TEMPLATE_PATH not found: {candidate}")
+    if candidate.is_dir():
+        raise SystemExit(f"ERROR: PRIMER_WORD_TEMPLATE_PATH is a directory: {candidate}")
+    try:
+        with candidate.open("rb"):
+            pass
+    except OSError as err:
+        raise SystemExit(
+            f"ERROR: PRIMER_WORD_TEMPLATE_PATH is not readable: {candidate} ({err})"
+        )
+    return candidate
 
 
 def _is_verbose() -> bool:
@@ -565,10 +817,8 @@ def generate_primer(
         except (OSError, ValueError):
             loaded_payload = None
         if isinstance(loaded_payload, dict):
-            sources_payload = loaded_payload
+            sources_payload = _sanitize_sources_payload(loaded_payload)
             sources_payload["prompt_library_path"] = str(prompt_path)
-            if not isinstance(sources_payload.get("sheets"), list):
-                sources_payload["sheets"] = []
 
     if isinstance(sources_payload.get("sheets"), list):
         existing_sheets = set(workbook.sheetnames)
@@ -586,8 +836,7 @@ def generate_primer(
                 f"Removed {removed_count} sheet(s) from sources.json not present in prompt library."
             )
 
-    first_sheet_written = False
-    prev_sheet_output_text = get_initial_context(output_dir_path)
+    prev_sheet_output_text = get_initial_context(sources_payload)
     prev_sheet_name: str | None = "seed:intro" if prev_sheet_output_text.strip() else None
     client = OpenAI(timeout=_REQUEST_TIMEOUT_SECONDS)
 
@@ -688,16 +937,14 @@ def generate_primer(
                 step_entry = {
                     "step_number": step_number,
                     "title": step_title_clean or step_label,
-                    "prompt_original": None,
-                    "prompt_final": None,
-                    "injected_prev_sheet_context": None,
-                    "prev_sheet_name_used": None,
-                    "prev_sheet_output_chars": None,
-                    "output_text": "",
+                    "prompt": None,
+                    "response_text": "",
                     "model": None,
+                    "reasoning_effort_requested": None,
+                    "reasoning_effort_effective": None,
+                    "web_search": web_search_enabled,
+                    "deep_research_requested": deep_research_requested,
                     "web_tool_type": None,
-                    "request_used": None,
-                    "response": None,
                     "deep_research_effective": False,
                     "deep_research_error_reason": None,
                     "error": None,
@@ -706,19 +953,20 @@ def generate_primer(
                 steps_by_number[step_number] = step_entry
             else:
                 step_entry = existing_step_entry
-                step_entry.setdefault("prompt_original", None)
-                step_entry.setdefault("prompt_final", None)
-                step_entry.setdefault("injected_prev_sheet_context", None)
-                step_entry.setdefault("prev_sheet_name_used", None)
-                step_entry.setdefault("prev_sheet_output_chars", None)
-                step_entry.setdefault("output_text", "")
+                step_entry.setdefault("title", step_title_clean or step_label)
+                step_entry.setdefault("prompt", None)
+                step_entry.setdefault("response_text", "")
                 step_entry.setdefault("model", None)
+                step_entry.setdefault("reasoning_effort_requested", None)
+                step_entry.setdefault("reasoning_effort_effective", None)
+                step_entry.setdefault("web_search", web_search_enabled)
+                step_entry.setdefault("deep_research_requested", deep_research_requested)
                 step_entry.setdefault("web_tool_type", None)
-                step_entry.setdefault("request_used", None)
-                step_entry.setdefault("response", None)
                 step_entry.setdefault("deep_research_effective", False)
                 step_entry.setdefault("deep_research_error_reason", None)
                 step_entry.setdefault("error", None)
+                if "citations" in step_entry and not isinstance(step_entry["citations"], list):
+                    step_entry["citations"] = []
             try:
                 next_step_cell = _find_step_anchor(ws, step_number + 1, start_row=step_cell.row + 1)
                 end_row = next_step_cell.row if next_step_cell is not None else ws.max_row + 1
@@ -749,31 +997,26 @@ def generate_primer(
                     prev_sheet_output_chars,
                 ) = _post_process_prompt(prompt_original, prev_sheet_name, context_text)
                 step_entry["title"] = step_title_clean or step_label
-                step_entry["prompt_original"] = prompt_original
-                step_entry["prompt_final"] = prompt_final
-                step_entry["injected_prev_sheet_context"] = injected_prev_sheet_context
-                step_entry["prev_sheet_name_used"] = prev_sheet_name_used
-                step_entry["prev_sheet_output_chars"] = prev_sheet_output_chars
+                step_entry["prompt"] = prompt_final
+                step_entry["web_search"] = web_search_enabled
+                step_entry["deep_research_requested"] = deep_research_requested
 
                 output_text = ""
-                error_info: dict[str, str] | None = None
+                error_message: str | None = None
                 call_label = f"[sheet {sheet_index}/{len(selected_sheets)}][step {step_number}]"
 
                 if resume and existing_step_entry is not None and _step_is_completed(existing_step_entry):
-                    output_text = _ensure_output_text(step_entry) or ""
+                    output_text = _ensure_response_text(step_entry) or ""
                     if output_text:
-                        step_entry["output_text"] = output_text.strip()
-                    elif step_entry.get("output_text") is None:
-                        step_entry["output_text"] = ""
+                        step_entry["response_text"] = output_text.strip()
+                    elif step_entry.get("response_text") is None:
+                        step_entry["response_text"] = ""
                     print(f"{call_label} SKIP completed step")
-                    if (not first_sheet_written) and step_number == 1 and sheet_index == 1:
-                        first_sheet_written = True
                 else:
                     model = base_model
                     web_tool_type: str | None = "web_search" if web_search_enabled else None
                     deep_research_effective = False
                     deep_research_error_reason: str | None = None
-                    request_used: dict[str, Any] = {}
                     response: Any | None = None
 
                     call_start = time.perf_counter()
@@ -792,11 +1035,6 @@ def generate_primer(
                             model = deep_model
                             web_tool_type = "web_search_preview" if web_search_enabled else None
                             deep_research_effective = True
-                            request_used = {
-                                "model": request_kwargs.get("model"),
-                                "tools": request_kwargs.get("tools"),
-                                "reasoning": request_kwargs.get("reasoning"),
-                            }
                         except (RateLimitError, NotFoundError) as err:
                             if isinstance(err, RateLimitError):
                                 deep_research_error_reason = _format_error_reason(err)
@@ -811,11 +1049,6 @@ def generate_primer(
                                 request_kwargs["tools"] = [{"type": "web_search"}]
                             if reasoning_effort is not None and _model_supports_reasoning_effort(model):
                                 request_kwargs["reasoning"] = {"effort": reasoning_effort}
-                            request_used = {
-                                "model": request_kwargs.get("model"),
-                                "tools": request_kwargs.get("tools"),
-                                "reasoning": request_kwargs.get("reasoning"),
-                            }
                             try:
                                 response = _call_openai_with_retries(
                                     client,
@@ -824,21 +1057,13 @@ def generate_primer(
                                     base_sleep_seconds=base_sleep_seconds,
                                 )
                             except RateLimitError as err_fallback:
-                                error_info = {
-                                    "type": type(err_fallback).__name__,
-                                    "message": str(err_fallback),
-                                }
+                                error_message = f"{type(err_fallback).__name__}: {err_fallback}"
                     else:
                         request_kwargs = {"model": model, "input": prompt_final}
                         if web_search_enabled:
                             request_kwargs["tools"] = [{"type": "web_search"}]
                         if reasoning_effort is not None and _model_supports_reasoning_effort(model):
                             request_kwargs["reasoning"] = {"effort": reasoning_effort}
-                        request_used = {
-                            "model": request_kwargs.get("model"),
-                            "tools": request_kwargs.get("tools"),
-                            "reasoning": request_kwargs.get("reasoning"),
-                        }
                         try:
                             response = _call_openai_with_retries(
                                 client,
@@ -847,7 +1072,7 @@ def generate_primer(
                                 base_sleep_seconds=base_sleep_seconds,
                             )
                         except RateLimitError as err:
-                            error_info = {"type": type(err).__name__, "message": str(err)}
+                            error_message = f"{type(err).__name__}: {err}"
 
                     effort_effective = None if deep_research_effective else reasoning_effort
                     call_elapsed = time.perf_counter() - call_start
@@ -867,64 +1092,45 @@ def generate_primer(
                     )
 
                     if response is not None:
-                        output_text = getattr(response, "output_text", None) or ""
-                        if not output_text:
-                            response_dict = _response_to_dict(response)
-                            for item in response_dict.get("output", []) or []:
-                                if item.get("type") == "output_text" and item.get("text"):
-                                    output_text = item["text"]
-                                    break
+                        output_text = _extract_output_text_from_response(response) or ""
+                    citations: list[str] = []
+                    if response is not None:
+                        citations = _extract_citations_from_response(response, output_text)
+                    if not output_text and error_message is None:
+                        error_message = "No output returned."
 
                     step_entry["model"] = model
+                    step_entry["reasoning_effort_requested"] = reasoning_effort
+                    step_entry["reasoning_effort_effective"] = effort_effective
+                    step_entry["web_search"] = web_search_enabled
+                    step_entry["deep_research_requested"] = deep_research_requested
                     step_entry["web_tool_type"] = web_tool_type
-                    step_entry["request_used"] = request_used
-                    step_entry["response"] = _response_to_dict(response) if response is not None else None
                     step_entry["deep_research_effective"] = deep_research_effective
                     step_entry["deep_research_error_reason"] = deep_research_error_reason
-                    step_entry["error"] = error_info
-                    step_entry["output_text"] = output_text.strip() if output_text else ""
+                    step_entry["error"] = error_message
+                    step_entry["response_text"] = output_text.strip() if output_text else ""
+                    if citations:
+                        step_entry["citations"] = citations
+                    elif "citations" in step_entry:
+                        step_entry["citations"] = []
 
                     if deep_research_effective:
                         sheet_entry["deep_research_effective"] = True
                     if deep_research_error_reason and sheet_entry["deep_research_error_reason"] is None:
                         sheet_entry["deep_research_error_reason"] = deep_research_error_reason
 
-                    if (not first_sheet_written) and step_number == 1:
-                        if output_text and output_text.strip():
-                            write_output_text(
-                                "primer_step1_company_introduction.md",
-                                "# Company Introduction\n\n" + output_text.strip() + "\n",
-                            )
-                        legacy_sources_payload = {
-                            "prompt": prompt_final,
-                            "model": model,
-                            "reasoning_effort_requested": reasoning_effort,
-                            "reasoning_effort_effective": effort_effective,
-                            "web_search": web_search_enabled,
-                            "deep_research_requested": deep_research_requested,
-                            "deep_research_effective": deep_research_effective,
-                            "deep_research_error_reason": deep_research_error_reason,
-                            "web_tool_type": web_tool_type,
-                            "request_used": request_used,
-                            "response": _response_to_dict(response) if response is not None else None,
-                            "error": error_info,
-                        }
-                        if not output_text or not output_text.strip():
-                            legacy_sources_payload["error"] = legacy_sources_payload["error"] or {}
-                            legacy_sources_payload["error"]["message"] = "No output returned for step 1."
-                        write_output_json("sources_step1.json", legacy_sources_payload)
-                        first_sheet_written = True
 
                 primer_sections.append(heading)
                 if output_text:
                     primer_sections.append(output_text.strip())
                     current_sheet_output_sections.append(output_text.strip())
-                elif error_info:
-                    primer_sections.append(f"Error: {error_info.get('message')}")
+                elif error_message:
+                    primer_sections.append(f"Error: {error_message}")
                 else:
                     primer_sections.append("Error: No output returned.")
             except Exception as err:
-                step_entry["error"] = {"type": type(err).__name__, "message": str(err)}
+                step_entry["error"] = f"{type(err).__name__}: {err}"
+                step_entry["response_text"] = ""
                 primer_sections.append(heading)
                 primer_sections.append(f"Error: {err}")
 
@@ -944,44 +1150,45 @@ def generate_primer(
     write_output_text("primer.md", primer_content)
     write_output_json("sources.json", sources_payload)
 
-    template_path_value = os.getenv("PRIMER_WORD_TEMPLATE_PATH", "").strip()
-    template_path: Path | None = None
-    if template_path_value:
-        candidate = Path(template_path_value)
-        if not candidate.is_absolute():
-            repo_root = Path(__file__).resolve().parents[2]
-            candidate = repo_root / candidate
-        template_path = candidate
-
-    try:
-        from primer_ops.render_docx import render_primer_docx
-    except Exception as err:
-        print(f"DOCX render skipped/failed: {err}")
-        if _is_verbose():
-            traceback.print_exc()
-    else:
-        for out_dir in output_dirs:
-            md_path = out_dir / "primer.md"
-            if not md_path.exists():
-                print(f"DOCX render skipped/failed: {md_path} not found")
-                continue
-            docx_path = md_path.with_suffix(".docx")
-            try:
-                render_primer_docx(
-                    str(md_path),
-                    str(docx_path),
-                    str(template_path) if template_path else None,
-                )
-                print(f"Saved: {docx_path}")
-            except Exception as err:
-                print(f"DOCX render failed: {err}")
-                if _is_verbose():
-                    traceback.print_exc()
-
     print(f"Saved: {output_dir_path / 'primer.md'}")
     print(f"Saved: {output_dir_path / 'sources.json'}")
     if run_output_dir_path is not None:
         print(f"Saved: {run_output_dir_path / 'primer.md'}")
         print(f"Saved: {run_output_dir_path / 'sources.json'}")
+
+    template_path = _resolve_template_path()
+    try:
+        from primer_ops.render_docx import render_primer_docx
+    except Exception as err:
+        print(f"ERROR: DOCX renderer import failed: {err}")
+        if _is_verbose():
+            traceback.print_exc()
+        raise SystemExit(1)
+
+    docx_errors: list[str] = []
+    for out_dir in output_dirs:
+        md_path = out_dir / "primer.md"
+        if not md_path.exists():
+            msg = f"{md_path} not found"
+            print(f"ERROR: DOCX render failed: {msg}")
+            docx_errors.append(msg)
+            continue
+        docx_path = md_path.with_suffix(".docx")
+        try:
+            render_primer_docx(
+                str(md_path),
+                str(docx_path),
+                str(template_path),
+            )
+            print(f"Saved: {docx_path}")
+        except Exception as err:
+            msg = f"{docx_path}: {err}"
+            print(f"ERROR: DOCX render failed: {err}")
+            if _is_verbose():
+                traceback.print_exc()
+            docx_errors.append(msg)
+
+    if docx_errors:
+        raise SystemExit("ERROR: DOCX render failed (see above).")
     elapsed = time.perf_counter() - t0
     print(f"Done in {format_seconds(elapsed)}", flush=True)

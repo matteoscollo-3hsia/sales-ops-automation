@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import sys
 import tempfile
@@ -9,6 +11,7 @@ from docx import Document
 from dotenv import find_dotenv, load_dotenv
 
 from primer_ops.render_docx import render_primer_docx
+from primer_ops.primer import resolve_lead_input_path, resolve_output_targets
 from scripts.compare_docx_structure import compare_docx_structure
 
 
@@ -59,10 +62,37 @@ def _assert_heading_styles() -> None:
             ), f"Heading 2 style mismatch: {subsection_para.style.name}"
 
 
+def _resolve_latest_md_path(lead_input: str | None, output_dir: str | None) -> Path:
+    lead_path = resolve_lead_input_path(lead_input)
+    if not lead_path.exists():
+        raise SystemExit(
+            f"ERROR: lead_input.json not found at {lead_path}. "
+            "Use --lead-input or set LEAD_INPUT_PATH."
+        )
+    lead = json.loads(lead_path.read_text(encoding="utf-8"))
+    if not isinstance(lead, dict):
+        raise SystemExit("ERROR: lead_input.json must contain a JSON object.")
+    targets = resolve_output_targets(output_dir, lead)
+    return targets["output_dir"] / "primer.md"
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="DOCX smoke test")
+    parser.add_argument(
+        "--lead-input",
+        default=None,
+        help="Path to lead_input.json (default: ./lead_input.json or LEAD_INPUT_PATH)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Override OUTPUT_BASE_DIR/OUTPUT_DIR (use as final output folder)",
+    )
+    args = parser.parse_args()
+
     load_dotenv(find_dotenv(usecwd=True), override=False)
     _assert_heading_styles()
-    md_path = Path("output") / "primer.md"
+    md_path = _resolve_latest_md_path(args.lead_input, args.output_dir)
     docx_path = md_path.with_suffix(".docx")
     template_path = os.getenv("PRIMER_WORD_TEMPLATE_PATH", "").strip() or None
 
