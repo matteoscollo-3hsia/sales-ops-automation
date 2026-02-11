@@ -16,7 +16,12 @@ from openai import APITimeoutError, OpenAI, NotFoundError, RateLimitError
 from openpyxl import load_workbook
 
 from primer_ops.client_repo import ensure_client_repo, sanitize_folder_name
-from primer_ops.config import get_lead_input_path, get_output_base_dir, get_output_dir
+from primer_ops.config import (
+    get_include_headings,
+    get_lead_input_path,
+    get_output_base_dir,
+    get_output_dir,
+)
 
 def _normalize(text: str) -> str:
     return " ".join(text.strip().split()).lower()
@@ -691,6 +696,7 @@ def generate_primer(
     include: str | None = None,
     exclude: str | None = None,
     resume: bool = True,
+    include_headings: bool | None = None,
     lead_input: str | None = None,
 ) -> None:
     env_path = find_dotenv(usecwd=True)
@@ -703,6 +709,10 @@ def generate_primer(
         nonlocal step
         step += 1
         print(f"[{step}/{total_steps}] {msg}", flush=True)
+
+    include_headings_effective = (
+        include_headings if include_headings is not None else get_include_headings(False)
+    )
 
     lead_input_path = resolve_lead_input_path(lead_input)
 
@@ -805,7 +815,7 @@ def generate_primer(
 
     print(f"Sheets to run: {', '.join(selected_sheets)}")
 
-    primer_sections: list[str] = ["# Commercial Primer"]
+    primer_sections: list[str] = ["# Commercial Primer"] if include_headings_effective else []
     sources_path = output_dir_path / "sources.json"
     sources_payload: dict[str, Any] = {
         "prompt_library_path": str(prompt_path),
@@ -904,7 +914,8 @@ def generate_primer(
             sheet_entry["deep_research_requested"] = deep_research_requested
             sheet_entry.setdefault("steps", [])
 
-        primer_sections.append(f"## {sheet_name}")
+        if include_headings_effective:
+            primer_sections.append(f"## {sheet_name}")
 
         prompts_cell = _require_anchor(_find_anchor_exact(ws, "Prompts"), "Prompts")
         current_sheet_output_sections: list[str] = []
@@ -1120,19 +1131,23 @@ def generate_primer(
                         sheet_entry["deep_research_error_reason"] = deep_research_error_reason
 
 
-                primer_sections.append(heading)
+                if include_headings_effective:
+                    primer_sections.append(heading)
                 if output_text:
-                    primer_sections.append(output_text.strip())
-                    current_sheet_output_sections.append(output_text.strip())
-                elif error_message:
-                    primer_sections.append(f"Error: {error_message}")
-                else:
-                    primer_sections.append("Error: No output returned.")
+                    trimmed_output = output_text.strip()
+                    primer_sections.append(trimmed_output)
+                    current_sheet_output_sections.append(trimmed_output)
+                elif include_headings_effective:
+                    if error_message:
+                        primer_sections.append(f"Error: {error_message}")
+                    else:
+                        primer_sections.append("Error: No output returned.")
             except Exception as err:
                 step_entry["error"] = f"{type(err).__name__}: {err}"
                 step_entry["response_text"] = ""
-                primer_sections.append(heading)
-                primer_sections.append(f"Error: {err}")
+                if include_headings_effective:
+                    primer_sections.append(heading)
+                    primer_sections.append(f"Error: {err}")
 
             primer_content = "\n\n".join(primer_sections).strip() + "\n"
             write_output_text("primer.md", primer_content)

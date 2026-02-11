@@ -55,6 +55,12 @@ def main() -> int:
         action=argparse.BooleanOptionalAction,
         help="Resume from sources.json if present (default: True).",
     )
+    gen_parser.add_argument(
+        "--include-headings",
+        default=None,
+        action="store_true",
+        help="Include sheet/step headings in primer.md (default: disabled).",
+    )
 
     args = parser.parse_args()
 
@@ -70,6 +76,7 @@ def main() -> int:
             include=args.include,
             exclude=args.exclude,
             resume=args.resume,
+            include_headings=args.include_headings,
         )
         return 0
 

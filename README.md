@@ -18,3 +18,7 @@ Output resolution precedence:
 - `lead_input.json`: `client_output_dir` or `output_dir`
 - `OUTPUT_BASE_DIR/<company_folder>`
 - `OUTPUT_DIR/<company_folder>` (legacy)
+
+## Tests
+Run:
+`uv run pytest`
