@@ -92,6 +92,35 @@ def _assert_inline_markdown_render() -> None:
         assert has_url_text or has_hyperlink_rel, "Expected link URL not found."
 
 
+def _assert_numeric_heading_normalization() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        md_path = tmp_path / "numeric.md"
+        docx_path = tmp_path / "numeric.docx"
+        md_path.write_text(
+            "1. Company Introduction\n\n2.1 Ownership & Governance\n\nParagraph.\n",
+            encoding="utf-8",
+        )
+        render_primer_docx(str(md_path), str(docx_path), None)
+        doc = Document(str(docx_path))
+        intro_para = _get_paragraph_by_text(doc, "1. Company Introduction")
+        ownership_para = _get_paragraph_by_text(doc, "2.1 Ownership & Governance")
+
+        if _style_exists(doc, "Heading 1"):
+            assert (
+                intro_para.style.name == "Heading 1"
+            ), f"Numeric heading styled as {intro_para.style.name}"
+        else:
+            assert intro_para.style.name != "List Number"
+
+        if _style_exists(doc, "Heading 2"):
+            assert (
+                ownership_para.style.name == "Heading 2"
+            ), f"Numeric heading styled as {ownership_para.style.name}"
+        else:
+            assert ownership_para.style.name != "List Number"
+
+
 def _resolve_latest_md_path(lead_input: str | None, output_dir: str | None) -> Path:
     lead_path = resolve_lead_input_path(lead_input)
     if not lead_path.exists():
@@ -123,6 +152,7 @@ def main() -> None:
     load_dotenv(find_dotenv(usecwd=True), override=False)
     _assert_heading_styles()
     _assert_inline_markdown_render()
+    _assert_numeric_heading_normalization()
     md_path = _resolve_latest_md_path(args.lead_input, args.output_dir)
     docx_path = md_path.with_suffix(".docx")
     template_path = os.getenv("PRIMER_WORD_TEMPLATE_PATH", "").strip() or None

@@ -14,6 +14,12 @@ from docx.shared import Pt
 from docx.text.paragraph import Paragraph
 
 PLACEHOLDER = "{{CONTENT}}"
+_NUMERIC_HEADING_RE = re.compile(r"^(?P<num>\d+(?:\.\d+)*)(?:\.)?\s+\S")
+_ORDERED_LIST_RE = re.compile(r"^\d+\.\s+\S")
+_TABLE_SEP_LINE_RE = re.compile(r"^[\s\|\-:]+$")
+_TABLE_SEP_CELL_RE = re.compile(r"^:?-{3,}:?$")
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_REQUIRE_NUMERIC_HEADING_CAPS = True
 
 
 def render_primer_docx(
@@ -24,6 +30,7 @@ def render_primer_docx(
     template_file = Path(template_path) if template_path else None
 
     markdown_text = md_file.read_text(encoding="utf-8")
+    markdown_text = normalize_markdown_for_docx(markdown_text)
     doc, writer = _init_document(template_file)
     _apply_placeholder_replacements(doc, md_file)
     _apply_style_profile(doc)
@@ -35,6 +42,261 @@ def render_primer_docx(
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
     _save_docx_atomic(doc, out_file)
+
+
+def normalize_markdown_for_docx(text: str) -> str:
+    if not text:
+        return text
+    has_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    fence_mask = _compute_fence_mask(lines)
+    lines = _normalize_table_separators(lines, fence_mask)
+    table_mask = _compute_table_mask(lines, fence_mask)
+    lines = _normalize_numeric_headings(lines, fence_mask, table_mask)
+    normalized = "\n".join(lines)
+    if has_trailing_newline:
+        normalized += "\n"
+    return normalized
+
+
+def _normalize_table_separators(lines: list[str], fence_mask: list[bool]) -> list[str]:
+    updated = list(lines)
+    i = 0
+    while i + 1 < len(updated):
+        if fence_mask[i] or fence_mask[i + 1]:
+            i += 1
+            continue
+        header_line = updated[i]
+        sep_line = updated[i + 1]
+        if not _is_table_header_line(header_line) or not _is_table_separator_line(sep_line):
+            i += 1
+            continue
+        header_cells = _split_pipe_row(header_line)
+        if not header_cells:
+            i += 1
+            continue
+        sep_cells = _split_pipe_row(sep_line)
+        sep_cells = _normalize_separator_cells(sep_cells, len(header_cells))
+        updated[i + 1] = "|" + " | ".join(sep_cells) + "|"
+        i += 2
+    return updated
+
+
+def _normalize_numeric_headings(
+    lines: list[str], fence_mask: list[bool], table_mask: list[bool]
+) -> list[str]:
+    updated: list[str] = []
+    in_list = False
+    list_indent = 0
+    for idx, line in enumerate(lines):
+        stripped = line.rstrip("\n")
+        if fence_mask[idx] or table_mask[idx] or _is_indented_code_line(stripped):
+            updated.append(stripped)
+            in_list, list_indent = _update_list_state(stripped, in_list, list_indent)
+            continue
+        if _should_convert_numeric_heading(lines, idx, in_list):
+            match = _NUMERIC_HEADING_RE.match(stripped)
+            num = match.group("num") if match else ""
+            depth = num.count(".") + 1 if num else 1
+            level = min(4, depth + 1)
+            updated.append(f"{'#' * level} {stripped}")
+            in_list = False
+            list_indent = 0
+            continue
+
+        updated.append(stripped)
+        in_list, list_indent = _update_list_state(stripped, in_list, list_indent)
+    return updated
+
+
+def _should_convert_numeric_heading(lines: list[str], index: int, in_list: bool) -> bool:
+    line = lines[index]
+    stripped = line.strip("\n")
+    if not stripped:
+        return False
+    if line[:1].isspace():
+        return False
+    if stripped.startswith("#"):
+        return False
+    if stripped.lstrip().startswith("|"):
+        return False
+    if not _NUMERIC_HEADING_RE.match(stripped):
+        return False
+    if not _is_title_like_numeric_heading(lines, index, stripped):
+        return False
+    if in_list:
+        return False
+    if _is_consecutive_ordered_list(lines, index):
+        return False
+    return True
+
+
+def _is_title_like_numeric_heading(lines: list[str], index: int, stripped: str) -> bool:
+    if len(stripped) > 80:
+        return False
+    if not _has_required_numeric_marker(stripped):
+        return False
+    if not _next_line_allows_heading(lines, index):
+        return False
+    if _REQUIRE_NUMERIC_HEADING_CAPS and not _starts_with_uppercase_alpha(stripped):
+        return False
+    return True
+
+
+def _has_required_numeric_marker(text: str) -> bool:
+    match = _NUMERIC_HEADING_RE.match(text)
+    if not match:
+        return False
+    num = match.group("num")
+    if "." in num:
+        return True
+    return text.startswith(f"{num}.")
+
+def _next_line_allows_heading(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines):
+        return False
+    next_line = lines[index + 1]
+    if not next_line.strip():
+        return True
+    if next_line.lstrip().startswith("|"):
+        return False
+    return True
+
+
+def _starts_with_uppercase_alpha(text: str) -> bool:
+    match = _NUMERIC_HEADING_RE.match(text)
+    if not match:
+        return False
+    num = match.group("num")
+    marker = f"{num}."
+    remainder = text[len(marker) :] if text.startswith(marker) else text[len(num) :]
+    for ch in remainder:
+        if ch.isalpha():
+            return ch.isupper()
+    return True
+
+
+def _is_consecutive_ordered_list(lines: list[str], index: int) -> bool:
+    line = lines[index].strip()
+    if not _ORDERED_LIST_RE.match(line):
+        return False
+    if index > 0:
+        prev = lines[index - 1].strip()
+        if prev and _ORDERED_LIST_RE.match(prev):
+            return True
+    if index + 1 < len(lines):
+        nxt = lines[index + 1].strip()
+        if nxt and _ORDERED_LIST_RE.match(nxt):
+            return True
+    return False
+
+
+def _update_list_state(line: str, in_list: bool, list_indent: int) -> tuple[bool, int]:
+    if not line.strip():
+        return False, 0
+    if _is_list_marker_line(line):
+        return True, _leading_ws(line)
+    if in_list and _leading_ws(line) > list_indent:
+        return True, list_indent
+    return False, 0
+
+
+def _is_list_marker_line(line: str) -> bool:
+    if re.match(r"^\s*[-*+]\s+\S", line):
+        return True
+    return bool(re.match(r"^\s*\d+[.)]\s+\S", line))
+
+
+def _leading_ws(line: str) -> int:
+    count = 0
+    for ch in line:
+        if ch == " ":
+            count += 1
+        elif ch == "\t":
+            count += 4
+        else:
+            break
+    return count
+
+
+def _is_indented_code_line(line: str) -> bool:
+    return bool(re.match(r"^(?:\t| {4,})", line))
+
+
+def _is_table_header_line(line: str) -> bool:
+    return line.lstrip().startswith("|")
+
+
+def _is_table_separator_line(line: str) -> bool:
+    stripped = line.strip()
+    if "-" not in stripped:
+        return False
+    return bool(_TABLE_SEP_LINE_RE.match(stripped))
+
+
+def _split_pipe_row(line: str) -> list[str]:
+    text = line.strip()
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|"):
+        text = text[:-1]
+    return [cell.strip() for cell in text.split("|")]
+
+
+def _normalize_separator_cells(sep_cells: list[str], target_count: int) -> list[str]:
+    normalized: list[str] = []
+    for idx in range(target_count):
+        raw = sep_cells[idx] if idx < len(sep_cells) else ""
+        token = raw.strip().replace(" ", "")
+        if token and _TABLE_SEP_CELL_RE.match(token):
+            normalized.append(token)
+        else:
+            normalized.append("---")
+    return normalized
+
+
+def _compute_fence_mask(lines: list[str]) -> list[bool]:
+    mask = [False] * len(lines)
+    in_fence = False
+    for i, line in enumerate(lines):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            mask[i] = True
+            continue
+        mask[i] = in_fence
+    return mask
+
+
+def _compute_table_mask(lines: list[str], fence_mask: list[bool]) -> list[bool]:
+    mask = [False] * len(lines)
+    i = 0
+    while i + 1 < len(lines):
+        if fence_mask[i] or fence_mask[i + 1]:
+            i += 1
+            continue
+        header_line = lines[i]
+        sep_line = lines[i + 1]
+        if not _is_table_header_line(header_line) or not _is_table_separator_line(sep_line):
+            i += 1
+            continue
+        header_cells = _split_pipe_row(header_line)
+        sep_cells = _split_pipe_row(sep_line)
+        if not header_cells or not sep_cells:
+            i += 1
+            continue
+        mask[i] = True
+        mask[i + 1] = True
+        j = i + 2
+        while j < len(lines):
+            if fence_mask[j]:
+                break
+            row_line = lines[j]
+            if not row_line.strip() or "|" not in row_line:
+                break
+            mask[j] = True
+            j += 1
+        i = j
+    return mask
 
 
 class _DocWriter:
