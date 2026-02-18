@@ -887,6 +887,8 @@ def _add_hyperlink_runs(
         if r_pr is not None:
             run.append(r_pr)
         text_el = OxmlElement("w:t")
+        if text[:1].isspace() or text[-1:].isspace():
+            text_el.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
         text_el.text = text
         run.append(text_el)
         hyperlink.append(run)
@@ -924,31 +926,35 @@ def _inline_runs(inline_token: Any | None) -> list[dict[str, Any]]:
     if inline_token is None or not getattr(inline_token, "children", None):
         return []
     runs: list[dict[str, Any]] = []
-    bold = False
-    italic = False
-    link_url: str | None = None
+    strong_depth = 0
+    em_depth = 0
+    link_stack: list[str | None] = []
     for child in inline_token.children:
         token_type = child.type
         if token_type == "strong_open":
-            bold = True
+            strong_depth += 1
             continue
         if token_type == "strong_close":
-            bold = False
+            strong_depth = max(0, strong_depth - 1)
             continue
         if token_type == "em_open":
-            italic = True
+            em_depth += 1
             continue
         if token_type == "em_close":
-            italic = False
+            em_depth = max(0, em_depth - 1)
             continue
         if token_type == "link_open":
-            link_url = _extract_link_url(child)
+            link_stack.append(_extract_link_url(child))
             continue
         if token_type == "link_close":
-            link_url = None
+            if link_stack:
+                link_stack.pop()
             continue
+        bold = strong_depth > 0
+        italic = em_depth > 0
+        link_url = link_stack[-1] if link_stack else None
         if token_type == "code_inline":
-            _append_run(runs, child.content, False, False, True, link_url)
+            _append_run(runs, child.content, bold, italic, True, link_url)
             continue
         if token_type == "text":
             _append_run(runs, child.content, bold, italic, False, link_url)
