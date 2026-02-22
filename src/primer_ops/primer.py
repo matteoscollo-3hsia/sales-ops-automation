@@ -17,6 +17,7 @@ from openpyxl import load_workbook
 from primer_ops.client_repo import ensure_client_repo, sanitize_folder_name
 from primer_ops.config import (
     get_include_headings,
+    get_lead_input_path,
     get_output_base_dir,
 )
 from primer_ops.excel_helpers import (
@@ -92,6 +93,9 @@ def _extract_output_dir_override(lead: dict[str, Any]) -> Path | None:
 def resolve_lead_input_path(lead_input: str | None) -> Path:
     if lead_input and lead_input.strip():
         return Path(lead_input.strip())
+    env_path = get_lead_input_path()
+    if env_path is not None:
+        return env_path
     return Path("lead_input.json")
 
 

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 OUTPUT_BASE_DIR_ENV = "OUTPUT_BASE_DIR"
+LEAD_INPUT_PATH_ENV = "LEAD_INPUT_PATH"
 INCLUDE_HEADINGS_ENV = "INCLUDE_HEADINGS"
 
 
@@ -16,6 +17,10 @@ def _get_env_path(name: str) -> Path | None:
 
 def get_output_base_dir() -> Path | None:
     return _get_env_path(OUTPUT_BASE_DIR_ENV)
+
+
+def get_lead_input_path() -> Path | None:
+    return _get_env_path(LEAD_INPUT_PATH_ENV)
 
 
 def get_include_headings(default: bool = False) -> bool:

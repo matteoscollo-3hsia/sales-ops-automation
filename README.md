@@ -51,7 +51,7 @@ uv run python run.py generate-primer [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--output-dir` | Override output directory (used as final output folder) |
-| `--lead-input` | Path to `lead_input.json` (default: `./lead_input.json`) |
+| `--lead-input` | Path to `lead_input.json` (default: `LEAD_INPUT_PATH` or `./lead_input.json`) |
 | `--sheet` | Run a single Excel sheet by name |
 | `--include` | Regex or comma-separated list of sheet names to include |
 | `--exclude` | Regex or comma-separated list of sheet names to exclude |
@@ -73,6 +73,7 @@ uv run python run.py generate-primer [OPTIONS]
 | `OPENAI_DEEP_RESEARCH_MODEL` | Deep research model (default: `o4-mini-deep-research`) |
 | `PROMPT_LIBRARY_PATH` | Path to the Excel prompt library |
 | `OUTPUT_BASE_DIR` | Base directory for per-client output repos |
+| `LEAD_INPUT_PATH` | Default lead input path (fallback when `--lead-input` not passed) |
 | `PRIMER_WORD_TEMPLATE_PATH` | Path to the Word template for DOCX output |
 | `INCLUDE_HEADINGS` | Include headings in output (`1`/`true` to enable) |
 

@@ -34,7 +34,7 @@ def main() -> int:
     gen_parser.add_argument(
         "--lead-input",
         default=None,
-        help="Path to lead_input.json (default: ./lead_input.json)",
+        help="Path to lead_input.json (default: LEAD_INPUT_PATH env or ./lead_input.json)",
     )
     gen_parser.add_argument(
         "--sheet",
