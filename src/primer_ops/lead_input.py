@@ -7,7 +7,7 @@ from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 
 from primer_ops.client_repo import ensure_client_repo
-from primer_ops.config import get_output_base_dir, get_output_dir
+from primer_ops.config import get_output_base_dir
 
 
 class LeadInput(BaseModel):
@@ -47,7 +47,7 @@ def run_create_input(
     if lead_output:
         out_path = Path(lead_output)
     else:
-        base_dir = get_output_base_dir() or get_output_dir()
+        base_dir = get_output_base_dir()
         if base_dir is not None and company_name and company_name.strip():
             repo = ensure_client_repo(base_dir, company_name)
             out_path = repo["lead_input_path"]

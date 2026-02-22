@@ -29,11 +29,9 @@ Full review of the codex-playground repo to clean up structure, remove dead code
 - Replace manual `os.environ` save/restore with `monkeypatch` fixture — safer, auto-reverts on test exit even if test crashes.
 - Test functions were already pytest-compatible (`test_*` naming).
 
-**`src/smoke_test_openai.py`** → `tests/integration/test_openai_smoke.py`
+**`src/smoke_test_openai.py`** → deleted
 
-- Rename `main()` → `test_openai_connection()` for pytest discovery.
-- Add `@pytest.mark.integration` — this test requires a real API key and network access, so it should be opt-in (`-m integration`), not run in every CI pass.
-- Remove `if __name__` block — no longer needed.
+- Originally moved to `tests/integration/test_openai_smoke.py`, but removed entirely — requires real API key and network access, not suitable for automated test suite without a proper integration test infrastructure.
 
 **`src/smoke_test_docx.py`** → `tests/test_docx_rendering.py`
 
@@ -44,7 +42,6 @@ Full review of the codex-playground repo to clean up structure, remove dead code
 **`pyproject.toml`** updates:
 
 - Add `"scripts"` to `pythonpath` — allows any test that needs to import script modules.
-- Add pytest markers config: `integration` — suppresses "unknown marker" warnings and documents the marker's purpose.
 
 ## Phase 3: Lint & Format
 
@@ -87,7 +84,22 @@ Full review of the codex-playground repo to clean up structure, remove dead code
 - `_is_verbose()` → use `any()` generator expression — more idiomatic, eliminates explicit loop + early return.
 - `_error_is_empty()` → use `not error` / `not error.strip()` idioms — more Pythonic truthiness checks.
 
-## Phase 5: README Rewrite
+## Phase 5: Simplify Configuration
+
+**Why:** Multiple env vars and JSON keys that do the same thing add confusion without providing value. The codebase had `OUTPUT_DIR` (legacy) alongside `OUTPUT_BASE_DIR`, `LEAD_INPUT_PATH` as an env-only fallback, and `output_dir` in `lead_input.json` duplicating `client_output_dir`. Removing these reduces the number of concepts users need to understand.
+
+| Action | File | Reason |
+|--------|------|--------|
+| Remove | `config.py` `OUTPUT_DIR_ENV`, `get_output_dir()`, `get_output_root_dir()`, `LEAD_INPUT_PATH_ENV`, `get_lead_input_path()` | Legacy/duplicate env vars. `OUTPUT_BASE_DIR` is the only persistent output config needed. Lead input is resolved via `--lead-input` flag or `./lead_input.json` default. |
+| Update | `primer.py` `_extract_output_dir_override` | Remove `output_dir` key lookup — only `client_output_dir` is supported in `lead_input.json`. Eliminates ambiguity about which key to use. |
+| Update | `primer.py` `resolve_lead_input_path` | Remove `LEAD_INPUT_PATH` env fallback — use `--lead-input` flag or `./lead_input.json` default. Flags and JSON files are the two config mechanisms; env vars for paths add a third that's easy to forget. |
+| Update | `primer.py` `resolve_output_dir`, `resolve_output_targets` | Remove `get_output_dir()` fallback — only `get_output_base_dir()` is used. |
+| Update | `lead_input.py` | Remove `get_output_dir` import and fallback in `run_create_input`. |
+| Update | `cli.py` | Update help strings to remove references to `OUTPUT_DIR` and `LEAD_INPUT_PATH`. |
+| Delete | `tests/integration/test_openai_smoke.py` | Requires real API key, no CI infrastructure to support it. Removed entirely rather than maintaining dead test code. |
+| Update | `pyproject.toml` | Remove `integration` pytest marker — no integration tests remain. |
+
+## Phase 6: README Rewrite
 
 **Why:** The existing README is 25 lines with minimal information. New contributors need to understand prerequisites, setup steps, CLI flags, env vars, and project structure. A complete README reduces onboarding friction.
 
@@ -103,21 +115,13 @@ Expand to include:
 - **Project structure**: File tree with descriptions
 - **Tests**: How to run (including integration vs. unit)
 
-## Phase 6: Verification & PR
-
-1. `uv lock` → `uv sync`
-2. `uv run ruff check src/ tests/ scripts/`
-3. `uv run ruff format src/ tests/ scripts/`
-4. `uv run pytest` — all tests pass
-5. `uv run python run.py --help` — CLI works
-6. Commit all changes, push, open PR
 
 ---
 
 ## Files Modified/Created/Deleted
 
-**Deleted:** `scripts/__init__.py`, `src/create_lead_input.py`, `requirements.txt`, `src/smoke_test_*.py` (3 files)
+**Deleted:** `scripts/__init__.py`, `src/create_lead_input.py`, `requirements.txt`, `src/smoke_test_*.py` (3 files), `tests/integration/` (removed entirely)
 
-**Created:** `src/primer_ops/excel_helpers.py`, `src/primer_ops/openai_helpers.py`, `src/primer_ops/io_helpers.py`, `tests/test_output_resolution.py`, `tests/test_docx_rendering.py`, `tests/integration/test_openai_smoke.py`, `docs/review.md`
+**Created:** `src/primer_ops/excel_helpers.py`, `src/primer_ops/openai_helpers.py`, `src/primer_ops/io_helpers.py`, `tests/test_output_resolution.py`, `tests/test_docx_rendering.py`, `docs/review.md`
 
-**Modified:** `pyproject.toml`, `.gitignore`, `.gitattributes`, `src/primer_ops/primer.py`, `src/primer_ops/lead_input.py`, `README.md`, `tests/test_primer_headings.py`, all `src/primer_ops/*.py` (import sorting/formatting)
+**Modified:** `pyproject.toml`, `.gitignore`, `.gitattributes`, `src/primer_ops/primer.py`, `src/primer_ops/config.py`, `src/primer_ops/lead_input.py`, `src/primer_ops/cli.py`, `README.md`, `tests/test_primer_headings.py`, all `src/primer_ops/*.py` (import sorting/formatting)

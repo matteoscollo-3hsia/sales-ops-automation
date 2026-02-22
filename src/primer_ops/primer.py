@@ -17,9 +17,7 @@ from openpyxl import load_workbook
 from primer_ops.client_repo import ensure_client_repo, sanitize_folder_name
 from primer_ops.config import (
     get_include_headings,
-    get_lead_input_path,
     get_output_base_dir,
-    get_output_dir,
 )
 from primer_ops.excel_helpers import (
     _find_anchor_exact,
@@ -85,19 +83,15 @@ def _extract_company_name(lead: dict[str, Any]) -> str:
 
 
 def _extract_output_dir_override(lead: dict[str, Any]) -> Path | None:
-    for key in ("client_output_dir", "output_dir"):
-        value = lead.get(key)
-        if isinstance(value, str) and value.strip():
-            return Path(value.strip())
+    value = lead.get("client_output_dir")
+    if isinstance(value, str) and value.strip():
+        return Path(value.strip())
     return None
 
 
 def resolve_lead_input_path(lead_input: str | None) -> Path:
     if lead_input and lead_input.strip():
         return Path(lead_input.strip())
-    env_path = get_lead_input_path()
-    if env_path is not None:
-        return env_path
     return Path("lead_input.json")
 
 
@@ -107,11 +101,10 @@ def resolve_output_dir(output_dir: str | None, lead: dict[str, Any]) -> Path:
     override = _extract_output_dir_override(lead)
     if override is not None:
         return override
-    base_dir = get_output_base_dir() or get_output_dir()
+    base_dir = get_output_base_dir()
     if base_dir is None:
         raise SystemExit(
-            "ERROR: OUTPUT_BASE_DIR is not set. Please set it in the .env file. "
-            "(Legacy OUTPUT_DIR is also supported.)"
+            "ERROR: OUTPUT_BASE_DIR is not set. Please set it in the .env file."
         )
     company_name = _extract_company_name(lead)
     folder_name = sanitize_folder_name(company_name) or "unknown_company"
@@ -138,11 +131,10 @@ def resolve_output_targets(
             "latest_dir": None,
         }
 
-    base_dir = get_output_base_dir() or get_output_dir()
+    base_dir = get_output_base_dir()
     if base_dir is None:
         raise SystemExit(
-            "ERROR: OUTPUT_BASE_DIR is not set. Please set it in the .env file. "
-            "(Legacy OUTPUT_DIR is also supported.)"
+            "ERROR: OUTPUT_BASE_DIR is not set. Please set it in the .env file."
         )
     repo = ensure_client_repo(base_dir, company_name)
     repo_root = repo["repo_root"]
@@ -440,7 +432,7 @@ def generate_primer(
     if not lead_input_path.exists():
         raise SystemExit(
             f"ERROR: lead_input.json not found at {lead_input_path}. "
-            "Use --lead-input or set LEAD_INPUT_PATH."
+            "Use --lead-input to specify the path."
         )
     lead = json.loads(lead_input_path.read_text(encoding="utf-8"))
     if not isinstance(lead, dict):

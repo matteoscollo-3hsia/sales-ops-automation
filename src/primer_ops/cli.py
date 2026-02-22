@@ -29,12 +29,12 @@ def main() -> int:
     gen_parser.add_argument(
         "--output-dir",
         default=None,
-        help="Override OUTPUT_BASE_DIR/OUTPUT_DIR from .env (use as final output folder)",
+        help="Override output directory (use as final output folder)",
     )
     gen_parser.add_argument(
         "--lead-input",
         default=None,
-        help="Path to lead_input.json (default: ./lead_input.json or LEAD_INPUT_PATH)",
+        help="Path to lead_input.json (default: ./lead_input.json)",
     )
     gen_parser.add_argument(
         "--sheet",

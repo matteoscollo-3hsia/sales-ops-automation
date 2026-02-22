@@ -51,27 +51,18 @@ uv run python run.py generate-primer [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--output-dir` | Override output directory (used as final output folder) |
-| `--lead-input` | Path to `lead_input.json` |
+| `--lead-input` | Path to `lead_input.json` (default: `./lead_input.json`) |
 | `--sheet` | Run a single Excel sheet by name |
 | `--include` | Regex or comma-separated list of sheet names to include |
 | `--exclude` | Regex or comma-separated list of sheet names to exclude |
 | `--resume` / `--no-resume` | Resume from existing `sources.json` (default: enabled) |
 | `--include-headings` | Include sheet/step headings in `primer.md` (default: disabled) |
 
-## Path Resolution
+## Output Resolution
 
-### Lead input
-
-1. `--lead-input` (if provided)
-2. `LEAD_INPUT_PATH` (env)
-3. `./lead_input.json`
-
-### Output directory
-
-1. `--output-dir` (if provided, treated as final output folder)
-2. `lead_input.json`: `client_output_dir` or `output_dir`
-3. `OUTPUT_BASE_DIR/<company_folder>`
-4. `OUTPUT_DIR/<company_folder>` (legacy)
+1. `--output-dir` flag (if provided, used as final output folder)
+2. `client_output_dir` key in `lead_input.json`
+3. `OUTPUT_BASE_DIR/<company_folder>` (client repo layout with `latest/` and `runs/`)
 
 ## Environment Variables
 
@@ -82,8 +73,6 @@ uv run python run.py generate-primer [OPTIONS]
 | `OPENAI_DEEP_RESEARCH_MODEL` | Deep research model (default: `o4-mini-deep-research`) |
 | `PROMPT_LIBRARY_PATH` | Path to the Excel prompt library |
 | `OUTPUT_BASE_DIR` | Base directory for per-client output repos |
-| `OUTPUT_DIR` | Legacy output directory |
-| `LEAD_INPUT_PATH` | Default lead input path |
 | `PRIMER_WORD_TEMPLATE_PATH` | Path to the Word template for DOCX output |
 | `INCLUDE_HEADINGS` | Include headings in output (`1`/`true` to enable) |
 
@@ -122,10 +111,8 @@ codex-playground/
 │   ├── test_docx_rendering.py      # DOCX heading/inline/normalization tests
 │   ├── test_output_resolution.py   # Output path resolution tests
 │   ├── test_primer_headings.py     # End-to-end primer generation test
-│   ├── unit/
-│   │   └── test_markdown_normalize.py
-│   └── integration/
-│       └── test_openai_smoke.py    # Requires OPENAI_API_KEY
+│   └── unit/
+│       └── test_markdown_normalize.py
 └── docs/
     └── review.md                   # Code review cleanup plan
 ```
@@ -133,12 +120,21 @@ codex-playground/
 ## Tests
 
 ```bash
-# Run all tests (excluding integration)
-uv run pytest -m "not integration"
-
-# Run all tests including integration (requires OPENAI_API_KEY)
+# Run all tests
 uv run pytest
 
 # Run with verbose output
 uv run pytest -v
 ```
+
+## Known Limitations
+
+- **Pattern-matching based sourcing.** Prompt extraction from Excel relies on rigid anchor patterns (`"Instructions"`, `"Prompts"`, `"Step N"`, `"Suggested Prompt"`). Sheets that deviate from the expected layout — extra rows, merged cells, renamed anchors — will silently produce incomplete prompts or fail at runtime. This should be paired with an LLM-as-a-judge validation step that evaluates whether the extracted prompts are coherent and complete.
+
+- **No output quality validation.** Generated primer content is written as-is from the OpenAI response. There is no automated check for hallucinated facts, off-topic sections, missing coverage of requested topics, or tone/style consistency. A post-generation review step (human or LLM-based) is needed for production use.
+
+- **Single-threaded, sequential sheet processing.** Sheets are processed one at a time because each sheet's output becomes the context for the next. This means a 10-sheet prompt library with deep research enabled can take 30+ minutes. Sheets that don't depend on each other could in principle be parallelized.
+
+- **Brittle DOCX template coupling.** The Word renderer assumes specific style names exist in the template (`Heading 1`, `Heading 2`, `Normal`, etc.). If the template is modified or a different template is used, the output may silently fall back to default styles or produce misformatted documents.
+
+- **Context window limits not enforced.** The accumulated context from previous sheets is injected into each prompt without checking whether it exceeds the model's context window. For large prompt libraries, later sheets may silently receive truncated context. Only a problem if ~1M tokens are reached (approx ~4M characters).

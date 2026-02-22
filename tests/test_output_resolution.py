@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from primer_ops.client_repo import ensure_client_repo, sanitize_folder_name
@@ -33,7 +32,6 @@ def test_client_repo_output_targets_and_writes(tmp_path: Path, monkeypatch) -> N
     base_dir.mkdir()
 
     monkeypatch.setenv("OUTPUT_BASE_DIR", str(base_dir))
-    monkeypatch.delenv("OUTPUT_DIR", raising=False)
 
     lead = {"company_name": "Acme Corp"}
     targets = resolve_output_targets(None, lead)
@@ -61,7 +59,6 @@ def test_output_dir_override_skips_client_repo(tmp_path: Path, monkeypatch) -> N
     override_dir = tmp_path / "override"
 
     monkeypatch.setenv("OUTPUT_BASE_DIR", str(base_dir))
-    monkeypatch.delenv("OUTPUT_DIR", raising=False)
 
     lead = {"company_name": "Acme Corp"}
     targets = resolve_output_targets(str(override_dir), lead)
@@ -82,7 +79,6 @@ def test_lead_override_skips_client_repo(tmp_path: Path, monkeypatch) -> None:
     override_dir = tmp_path / "lead_override"
 
     monkeypatch.setenv("OUTPUT_BASE_DIR", str(base_dir))
-    monkeypatch.delenv("OUTPUT_DIR", raising=False)
 
     lead = {"company_name": "Acme Corp", "client_output_dir": str(override_dir)}
     targets = resolve_output_targets(None, lead)
@@ -95,14 +91,7 @@ def test_lead_override_skips_client_repo(tmp_path: Path, monkeypatch) -> None:
 def test_lead_input_resolution_independent_from_output_dir(
     tmp_path: Path, monkeypatch
 ) -> None:
-    lead_path = tmp_path / "lead_input.json"
-    lead_path.write_text(json.dumps({"company_name": "Acme"}), encoding="utf-8")
-
-    monkeypatch.delenv("LEAD_INPUT_PATH", raising=False)
     assert resolve_lead_input_path(None) == Path("lead_input.json")
-
-    monkeypatch.setenv("LEAD_INPUT_PATH", str(lead_path))
-    assert resolve_lead_input_path(None) == lead_path
 
     override_path = tmp_path / "override" / "lead.json"
     assert resolve_lead_input_path(str(override_path)) == override_path
@@ -110,4 +99,3 @@ def test_lead_input_resolution_independent_from_output_dir(
     override_output = tmp_path / "output_override"
     lead = {"company_name": "Acme"}
     assert resolve_output_dir(str(override_output), lead) == override_output
-    assert resolve_lead_input_path(None) == lead_path
