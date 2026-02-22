@@ -67,7 +67,12 @@ def _separator_count(doc: Document) -> int:
 def _is_list_paragraph(paragraph) -> bool:
     style_name = paragraph.style.name if paragraph.style is not None else ""
     has_num = bool(paragraph._p.xpath(".//w:numPr"))
-    return has_num or "List" in style_name or "Bullet" in style_name or "Number" in style_name
+    return (
+        has_num
+        or "List" in style_name
+        or "Bullet" in style_name
+        or "Number" in style_name
+    )
 
 
 def _list_count(doc: Document) -> int:
@@ -114,7 +119,10 @@ def compare_docx_structure(
             minor.append(
                 f"Table {idx + 1} row mismatch: generated={gen_table['rows']} golden={golden_table['rows']}"
             )
-        if golden_table["header_repeat_first_row"] and not gen_table["header_repeat_first_row"]:
+        if (
+            golden_table["header_repeat_first_row"]
+            and not gen_table["header_repeat_first_row"]
+        ):
             major.append(f"Table {idx + 1} missing header-repeat on first row")
         table_lines.append(
             f"- Table {idx + 1}: rows {gen_table['rows']} vs {golden_table['rows']}, "
@@ -170,7 +178,9 @@ def compare_docx_structure(
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
-    return CompareResult(report_path=report_path, major_mismatches=major, minor_notes=minor)
+    return CompareResult(
+        report_path=report_path, major_mismatches=major, minor_notes=minor
+    )
 
 
 def main() -> int:

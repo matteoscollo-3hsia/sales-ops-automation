@@ -9,6 +9,7 @@ __pycache__/
 .env
 
 # Outputs (generated files)
+out/
 output/
 *.docx
 *.pptx

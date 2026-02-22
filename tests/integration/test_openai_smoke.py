@@ -1,13 +1,16 @@
-from pathlib import Path
-import os
+from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import pytest
 from dotenv import load_dotenv
 from openai import OpenAI
 
 
-def main() -> None:
-    # Always load .env from repo root
-    root = Path(__file__).resolve().parents[1]
+@pytest.mark.integration
+def test_openai_connection() -> None:
+    root = Path(__file__).resolve().parents[2]
     load_dotenv(root / ".env", override=True)
 
     model = os.getenv("OPENAI_MODEL", "gpt-5.2")
@@ -18,8 +21,4 @@ def main() -> None:
         input="Reply with exactly: OK",
     )
 
-    print(resp.output_text)
-
-
-if __name__ == "__main__":
-    main()
+    assert resp.output_text.strip() == "OK"

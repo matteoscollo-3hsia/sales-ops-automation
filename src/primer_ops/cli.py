@@ -10,7 +10,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="primer-ops")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    create_parser = subparsers.add_parser("create-input", help="Create lead input interactively")
+    create_parser = subparsers.add_parser(
+        "create-input", help="Create lead input interactively"
+    )
     create_parser.add_argument(
         "--lead-output",
         default=None,

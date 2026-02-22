@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from primer_ops.client_repo import ensure_client_repo
 from primer_ops.config import get_output_base_dir, get_output_dir
+
+
 class LeadInput(BaseModel):
     company_name: str = Field(min_length=1)
     company_website: str = Field(default="")
@@ -36,7 +38,9 @@ def prompt_float(label: str) -> float:
             print("  -> Please enter a valid number (e.g., 75 or 75.5).")
 
 
-def run_create_input(lead_output: str | None = None, company_name: str | None = None) -> None:
+def run_create_input(
+    lead_output: str | None = None, company_name: str | None = None
+) -> None:
     env_path = find_dotenv(usecwd=True)
     load_dotenv(env_path, override=True)
     out_path: Path
@@ -60,8 +64,12 @@ def run_create_input(lead_output: str | None = None, company_name: str | None = 
         "hq_country": prompt_str("HQ country (optional)", required=False),
         "industry": prompt_str("Industry (optional)", required=False),
         "revenue_mln": prompt_float("Revenue in EUR (mln)"),
-        "primary_contact_name": prompt_str("Primary contact name (optional)", required=False),
-        "primary_contact_role": prompt_str("Primary contact role (optional)", required=False),
+        "primary_contact_name": prompt_str(
+            "Primary contact name (optional)", required=False
+        ),
+        "primary_contact_role": prompt_str(
+            "Primary contact role (optional)", required=False
+        ),
     }
 
     try:
