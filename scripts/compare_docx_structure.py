@@ -9,15 +9,6 @@ from docx import Document
 from docx.oxml.ns import qn
 
 
-def _length_to_pt(value) -> float | None:
-    if value is None:
-        return None
-    try:
-        return value.pt
-    except Exception:
-        return None
-
-
 def _row_has_header_repeat(row) -> bool:
     tr_pr = row._tr.trPr
     if tr_pr is None:
