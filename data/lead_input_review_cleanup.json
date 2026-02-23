@@ -1,0 +1,9 @@
+{
+  "company_name": "ACME Demo",
+  "company_website": "https://example.com",
+  "hq_country": "Italy",
+  "industry": "Food",
+  "revenue_mln": 120.0,
+  "primary_contact_name": "Mario Rossi",
+  "primary_contact_role": "CEO"
+}
