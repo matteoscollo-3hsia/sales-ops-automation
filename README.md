@@ -1,5 +1,9 @@
-# codex-playground
-Repository to test Sales Automation
+# sales ops-autoamation 
+Repository to test Sales Automation across the pipeline.
+
+Right now the scope is limited to the generation of the commercial primer after a prospect becomes a lead.
+
+Moving forward the aim is to automatise also Pitch development and LoPs development (& pricing models).
 
 ## CLI
 Create lead input:
