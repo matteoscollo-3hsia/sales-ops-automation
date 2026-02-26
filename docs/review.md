@@ -2,7 +2,7 @@
 
 ## Context
 
-Full review of the codex-playground repo to clean up structure, remove dead code, lint/format, improve style, and add proper documentation.
+Full review of the sales-ops-automation repo to clean up structure, remove dead code, lint/format, improve style, and add proper documentation.
 
 ---
 

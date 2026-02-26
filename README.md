@@ -1,4 +1,4 @@
-# codex-playground
+# sales-ops-automation
 
 Automated commercial primer generation from Excel prompt libraries using OpenAI, with Word (DOCX) output.
 
@@ -89,7 +89,7 @@ Standalone utility scripts in `scripts/`:
 ## Project Structure
 
 ```
-codex-playground/
+sales-ops-automation/
 ├── run.py                          # CLI entry point
 ├── pyproject.toml                  # Project config and dependencies
 ├── src/
