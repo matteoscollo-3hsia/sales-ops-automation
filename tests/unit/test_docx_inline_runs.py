@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from primer_ops.render_docx import render_primer_docx
-from scripts.dump_docx_runs import assert_run_thresholds, summarize_docx_runs
+from dump_docx_runs import assert_run_thresholds, summarize_docx_runs
 
 
 def test_inline_markdown_runs_are_preserved(tmp_path: Path) -> None:
