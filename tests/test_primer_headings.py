@@ -51,16 +51,15 @@ def test_generate_primer_no_headings(tmp_path, monkeypatch) -> None:
     lead_path = tmp_path / "lead_input.json"
     lead_path.write_text(json.dumps({"company_name": "Acme Corp"}), encoding="utf-8")
 
-    repo_root = Path(__file__).resolve().parents[1]
-    template_path = repo_root / "templates" / "Commercial_Primer_Template.docx"
-
     monkeypatch.setenv("PROMPT_LIBRARY_PATH", str(prompt_path))
-    monkeypatch.setenv("PRIMER_WORD_TEMPLATE_PATH", str(template_path))
     monkeypatch.delenv("INCLUDE_HEADINGS", raising=False)
 
     import primer_ops.render_docx as render_docx
 
     monkeypatch.setattr(render_docx, "render_primer_docx", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        primer, "_resolve_template_path", lambda: tmp_path / "fake_template.docx"
+    )
 
     output_dir = tmp_path / "out"
     primer.generate_primer(

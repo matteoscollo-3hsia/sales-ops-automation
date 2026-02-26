@@ -68,7 +68,9 @@ def _normalize_table_separators(lines: list[str], fence_mask: list[bool]) -> lis
             continue
         header_line = updated[i]
         sep_line = updated[i + 1]
-        if not _is_table_header_line(header_line) or not _is_table_separator_line(sep_line):
+        if not _is_table_header_line(header_line) or not _is_table_separator_line(
+            sep_line
+        ):
             i += 1
             continue
         header_cells = _split_pipe_row(header_line)
@@ -109,7 +111,9 @@ def _normalize_numeric_headings(
     return updated
 
 
-def _should_convert_numeric_heading(lines: list[str], index: int, in_list: bool) -> bool:
+def _should_convert_numeric_heading(
+    lines: list[str], index: int, in_list: bool
+) -> bool:
     line = lines[index]
     stripped = line.strip("\n")
     if not stripped:
@@ -151,6 +155,7 @@ def _has_required_numeric_marker(text: str) -> bool:
     if "." in num:
         return True
     return text.startswith(f"{num}.")
+
 
 def _next_line_allows_heading(lines: list[str], index: int) -> bool:
     if index + 1 >= len(lines):
@@ -276,7 +281,9 @@ def _compute_table_mask(lines: list[str], fence_mask: list[bool]) -> list[bool]:
             continue
         header_line = lines[i]
         sep_line = lines[i + 1]
-        if not _is_table_header_line(header_line) or not _is_table_separator_line(sep_line):
+        if not _is_table_header_line(header_line) or not _is_table_separator_line(
+            sep_line
+        ):
             i += 1
             continue
         header_cells = _split_pipe_row(header_line)
@@ -407,7 +414,9 @@ class _FallbackMarkdownParser:
     def _is_bullet_item(self, line: str) -> bool:
         return bool(re.match(r"^\s*[-*]\s+\S", line))
 
-    def _parse_bullet_list(self, lines: list[str], start: int) -> tuple[list[_Token], int]:
+    def _parse_bullet_list(
+        self, lines: list[str], start: int
+    ) -> tuple[list[_Token], int]:
         tokens: list[_Token] = [_Token("bullet_list_open")]
         i = start
         while i < len(lines):
@@ -424,7 +433,10 @@ class _FallbackMarkdownParser:
                 cont = lines[i]
                 if not cont.strip():
                     break
-                if self._is_bullet_item(cont) or self._parse_heading_line(cont) is not None:
+                if (
+                    self._is_bullet_item(cont)
+                    or self._parse_heading_line(cont) is not None
+                ):
                     break
                 if cont.startswith("  ") or cont.startswith("\t"):
                     item_text = (item_text + " " + cont.strip()).strip()
@@ -455,7 +467,9 @@ class _FallbackMarkdownParser:
             i += 1
         return " ".join(parts).strip(), i
 
-    def _parse_table(self, lines: list[str], start: int) -> tuple[list[_Token], int] | None:
+    def _parse_table(
+        self, lines: list[str], start: int
+    ) -> tuple[list[_Token], int] | None:
         if start + 1 >= len(lines):
             return None
         header_line = lines[start].rstrip()
@@ -468,7 +482,9 @@ class _FallbackMarkdownParser:
             return None
         if len(header_cells) != len(sep_cells):
             return None
-        if not all(self._table_sep_re.match(cell.replace(" ", "")) for cell in sep_cells):
+        if not all(
+            self._table_sep_re.match(cell.replace(" ", "")) for cell in sep_cells
+        ):
             return None
 
         rows: list[list[str]] = [header_cells]
@@ -680,7 +696,6 @@ def _ensure_template(template_path: Path) -> None:
         raise FileNotFoundError(f"Template not found: {template_path}")
 
 
-
 def _find_placeholder_paragraph(doc: Document, placeholder: str) -> Paragraph | None:
     for paragraph in doc.paragraphs:
         if placeholder in paragraph.text:
@@ -736,7 +751,11 @@ def _render_tokens(tokens: list[Any], doc: Document, writer: _DocWriter) -> None
 
         if token.type == "heading_open":
             level = int(token.tag[1]) if token.tag and token.tag.startswith("h") else 1
-            inline = tokens[i + 1] if i + 1 < len(tokens) and tokens[i + 1].type == "inline" else None
+            inline = (
+                tokens[i + 1]
+                if i + 1 < len(tokens) and tokens[i + 1].type == "inline"
+                else None
+            )
             runs = _inline_runs(inline)
             style = _heading_style(doc, level)
             _add_paragraph(writer, style, runs)
@@ -744,7 +763,11 @@ def _render_tokens(tokens: list[Any], doc: Document, writer: _DocWriter) -> None
             continue
 
         if token.type == "paragraph_open":
-            inline = tokens[i + 1] if i + 1 < len(tokens) and tokens[i + 1].type == "inline" else None
+            inline = (
+                tokens[i + 1]
+                if i + 1 < len(tokens) and tokens[i + 1].type == "inline"
+                else None
+            )
             runs = _inline_runs(inline)
             style = _paragraph_style(doc, list_stack, in_list_item)
             _add_paragraph(
@@ -792,7 +815,9 @@ def _heading_style(doc: Document, level: int) -> str | None:
     return "Heading 2"
 
 
-def _paragraph_style(doc: Document, list_stack: list[str], in_list_item: int) -> str | None:
+def _paragraph_style(
+    doc: Document, list_stack: list[str], in_list_item: int
+) -> str | None:
     if in_list_item > 0 and list_stack:
         list_kind = list_stack[-1]
         if list_kind == "bullet":
@@ -1042,7 +1067,9 @@ def _apply_placeholder_replacements(doc: Document, md_file: Path) -> None:
                     _replace_text_in_paragraph(paragraph, replacements)
 
 
-def _replace_text_in_paragraph(paragraph: Paragraph, replacements: dict[str, str]) -> None:
+def _replace_text_in_paragraph(
+    paragraph: Paragraph, replacements: dict[str, str]
+) -> None:
     text = paragraph.text
     if not text:
         return
@@ -1169,7 +1196,9 @@ def _apply_table_profile(table, doc: Document) -> None:
     tbl_w.set(qn("w:w"), "5000")
 
     section = doc.sections[0]
-    total_width_emu = int(section.page_width - section.left_margin - section.right_margin)
+    total_width_emu = int(
+        section.page_width - section.left_margin - section.right_margin
+    )
     total_twips = max(1, int(round(total_width_emu / 635.0)))
 
     col_count = len(table.columns) if table.columns else 0
@@ -1194,7 +1223,9 @@ def _apply_table_profile(table, doc: Document) -> None:
         _set_header_repeat(table.rows[0])
 
 
-def _compute_table_col_widths_twips(table, total_twips: int, col_count: int) -> list[int]:
+def _compute_table_col_widths_twips(
+    table, total_twips: int, col_count: int
+) -> list[int]:
     if col_count == 1:
         return [total_twips]
     if col_count == 2 and table.rows:
@@ -1246,7 +1277,9 @@ def _set_header_repeat(row) -> None:
         tr_pr.append(header)
 
 
-def _parse_table(tokens: list[Any], start_index: int) -> tuple[list[list[list[dict[str, Any]]]], int]:
+def _parse_table(
+    tokens: list[Any], start_index: int
+) -> tuple[list[list[list[dict[str, Any]]]], int]:
     rows: list[list[list[dict[str, Any]]]] = []
     row_cells: list[list[dict[str, Any]]] = []
     i = start_index + 1

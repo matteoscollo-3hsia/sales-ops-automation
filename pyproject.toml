@@ -6,10 +6,8 @@ dependencies = [
     "openai",
     "python-dotenv",
     "openpyxl",
-    "jinja2",
     "pydantic",
     "python-docx",
-    "python-pptx",
     "markdown-it-py",
     "mdit-py-plugins",
     "pillow",
@@ -18,8 +16,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=7",
+    "ruff>=0.8",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "scripts"]

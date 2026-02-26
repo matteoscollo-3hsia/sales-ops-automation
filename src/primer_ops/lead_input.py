@@ -7,7 +7,9 @@ from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 
 from primer_ops.client_repo import ensure_client_repo
-from primer_ops.config import get_output_base_dir, get_output_dir
+from primer_ops.config import get_output_base_dir
+
+
 class LeadInput(BaseModel):
     company_name: str = Field(min_length=1)
     company_website: str = Field(default="")
@@ -36,14 +38,16 @@ def prompt_float(label: str) -> float:
             print("  -> Please enter a valid number (e.g., 75 or 75.5).")
 
 
-def run_create_input(lead_output: str | None = None, company_name: str | None = None) -> None:
+def run_create_input(
+    lead_output: str | None = None, company_name: str | None = None
+) -> None:
     env_path = find_dotenv(usecwd=True)
     load_dotenv(env_path, override=True)
     out_path: Path
     if lead_output:
         out_path = Path(lead_output)
     else:
-        base_dir = get_output_base_dir() or get_output_dir()
+        base_dir = get_output_base_dir()
         if base_dir is not None and company_name and company_name.strip():
             repo = ensure_client_repo(base_dir, company_name)
             out_path = repo["lead_input_path"]
@@ -60,8 +64,12 @@ def run_create_input(lead_output: str | None = None, company_name: str | None = 
         "hq_country": prompt_str("HQ country (optional)", required=False),
         "industry": prompt_str("Industry (optional)", required=False),
         "revenue_mln": prompt_float("Revenue in EUR (mln)"),
-        "primary_contact_name": prompt_str("Primary contact name (optional)", required=False),
-        "primary_contact_role": prompt_str("Primary contact role (optional)", required=False),
+        "primary_contact_name": prompt_str(
+            "Primary contact name (optional)", required=False
+        ),
+        "primary_contact_role": prompt_str(
+            "Primary contact role (optional)", required=False
+        ),
     }
 
     try:

@@ -66,7 +66,12 @@ def _detect_list_paragraphs(doc: Document) -> list[dict[str, Any]]:
     for paragraph in doc.paragraphs:
         style_name = paragraph.style.name if paragraph.style is not None else ""
         has_num = bool(paragraph._p.xpath(".//w:numPr"))
-        if has_num or "List" in style_name or "Bullet" in style_name or "Number" in style_name:
+        if (
+            has_num
+            or "List" in style_name
+            or "Bullet" in style_name
+            or "Number" in style_name
+        ):
             fmt = paragraph.paragraph_format
             items.append(
                 {
@@ -153,7 +158,9 @@ def extract_docx_spec(docx_path: Path) -> dict[str, Any]:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: python scripts/extract_docx_spec.py path/to/docx", file=sys.stderr)
+        print(
+            "Usage: python scripts/extract_docx_spec.py path/to/docx", file=sys.stderr
+        )
         return 2
     docx_path = Path(sys.argv[1])
     if not docx_path.exists():

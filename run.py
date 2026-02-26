@@ -14,7 +14,9 @@ def main() -> int:
 
     env_path = find_dotenv(usecwd=True)
     load_dotenv(env_path, override=False)
-    os.environ.setdefault("PRIMER_WORD_TEMPLATE_PATH", "templates/Commercial_Primer_Template.docx")
+    os.environ.setdefault(
+        "PRIMER_WORD_TEMPLATE_PATH", "templates/Commercial_Primer_Template.docx"
+    )
 
     from primer_ops.cli import main as cli_main
 
